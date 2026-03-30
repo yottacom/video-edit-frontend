@@ -17,6 +17,7 @@ import { DashboardLayout } from '@/components/layout/DashboardLayout';
 import { VideoThumbnail } from '@/components/media/VideoThumbnail';
 import { Card, CardContent } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
+import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { sourceVideosApi, uploadsApi } from '@/lib/api';
 import { MultipartListPart, SourceVideo, UploadItem } from '@/types';
 
@@ -79,10 +80,16 @@ export default function VideosPage() {
   const [multipartPaused, setMultipartPaused] = useState(false);
   const [lastUpload, setLastUpload] = useState<UploadItem | null>(null);
   const [dragOver, setDragOver] = useState(false);
+  const [uploadModalOpen, setUploadModalOpen] = useState(false);
+  const [selectedUploadFile, setSelectedUploadFile] = useState<File | null>(null);
+  const [selectedUploadPreviewUrl, setSelectedUploadPreviewUrl] = useState<string | null>(null);
   const [previewVideo, setPreviewVideo] = useState<SourceVideo | null>(null);
+  const [videoToDelete, setVideoToDelete] = useState<SourceVideo | null>(null);
+  const [deletingVideoId, setDeletingVideoId] = useState<string | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const uploadStateRef = useRef<MultipartUploadSession>(createMultipartSession());
+  const uploadPreviewUrlRef = useRef<string | null>(null);
 
   const loadVideos = async () => {
     try {
@@ -97,6 +104,14 @@ export default function VideosPage() {
 
   useEffect(() => {
     loadVideos();
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (uploadPreviewUrlRef.current) {
+        URL.revokeObjectURL(uploadPreviewUrlRef.current);
+      }
+    };
   }, []);
 
   useEffect(() => {
@@ -118,10 +133,83 @@ export default function VideosPage() {
     };
   }, [previewVideo]);
 
+  useEffect(() => {
+    if (!uploadModalOpen) return;
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && !uploading) {
+        if (uploadPreviewUrlRef.current) {
+          URL.revokeObjectURL(uploadPreviewUrlRef.current);
+          uploadPreviewUrlRef.current = null;
+        }
+
+        setUploadModalOpen(false);
+        setSelectedUploadFile(null);
+        setSelectedUploadPreviewUrl(null);
+        setDragOver(false);
+        resetFileInput();
+        setUploadStatus('');
+        setUploadProgress(0);
+        setUploadMode(null);
+        setMultipartPaused(false);
+        setLastUpload(null);
+      }
+    };
+
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    window.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [uploadModalOpen, uploading]);
+
   const resetFileInput = () => {
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
     }
+  };
+
+  const updateSelectedUploadFile = (file: File | null) => {
+    if (uploadPreviewUrlRef.current) {
+      URL.revokeObjectURL(uploadPreviewUrlRef.current);
+      uploadPreviewUrlRef.current = null;
+    }
+
+    if (!file) {
+      setSelectedUploadFile(null);
+      setSelectedUploadPreviewUrl(null);
+      return;
+    }
+
+    const previewUrl = URL.createObjectURL(file);
+    uploadPreviewUrlRef.current = previewUrl;
+    setSelectedUploadFile(file);
+    setSelectedUploadPreviewUrl(previewUrl);
+  };
+
+  const clearSelectedUpload = () => {
+    updateSelectedUploadFile(null);
+    setDragOver(false);
+    resetFileInput();
+  };
+
+  const closeUploadModal = () => {
+    if (uploading) return;
+
+    setUploadModalOpen(false);
+    clearSelectedUpload();
+    setUploadStatus('');
+    setUploadProgress(0);
+    setUploadMode(null);
+    setMultipartPaused(false);
+    setLastUpload(null);
+  };
+
+  const openUploadModal = () => {
+    setUploadModalOpen(true);
   };
 
   const finishUpload = () => {
@@ -130,6 +218,18 @@ export default function VideosPage() {
     setMultipartPaused(false);
     uploadStateRef.current = createMultipartSession();
     resetFileInput();
+  };
+
+  const finalizeSuccessfulUpload = async (statusMessage: string) => {
+    await loadVideos();
+    finishUpload();
+    closeUploadModal();
+    setLastUpload(null);
+    setUploadStatus('');
+    setUploadProgress(0);
+    setUploadMode(null);
+    setMultipartPaused(false);
+    return statusMessage;
   };
 
   const abortMultipartUpload = async (reason = 'User cancelled') => {
@@ -277,8 +377,7 @@ export default function VideosPage() {
       setLastUpload(result);
       setUploadProgress(100);
       setUploadStatus('Direct upload complete. Refreshing source videos...');
-      await loadVideos();
-      setUploadStatus(`Direct upload complete: ${result.title}`);
+      await finalizeSuccessfulUpload(`Direct upload complete: ${result.title}`);
     } catch (error) {
       const message = getErrorMessage(error);
       console.error('Failed to upload with direct upload:', error);
@@ -326,8 +425,7 @@ export default function VideosPage() {
       setLastUpload(result);
       setUploadProgress(100);
       setUploadStatus('Multipart upload complete. Refreshing source videos...');
-      await loadVideos();
-      setUploadStatus(`Multipart upload complete: ${result.title}`);
+      await finalizeSuccessfulUpload(`Multipart upload complete: ${result.title}`);
     } catch (error) {
       if (!session.aborting) {
         const message = getErrorMessage(error);
@@ -340,7 +438,7 @@ export default function VideosPage() {
     }
   };
 
-  const handleUpload = async (files: FileList | null) => {
+  const prepareUpload = (files: FileList | null) => {
     if (!files || files.length === 0 || uploading) return;
 
     const file = files[0];
@@ -350,12 +448,26 @@ export default function VideosPage() {
       return;
     }
 
-    if (file.size > LARGE_UPLOAD_THRESHOLD_BYTES) {
-      await startMultipartUpload(file);
+    updateSelectedUploadFile(file);
+    setUploadStatus('');
+    setUploadProgress(0);
+    setUploadMode(null);
+    setMultipartPaused(false);
+    setLastUpload(null);
+    setUploadModalOpen(true);
+    setDragOver(false);
+    resetFileInput();
+  };
+
+  const handleUpload = async () => {
+    if (!selectedUploadFile || uploading) return;
+
+    if (selectedUploadFile.size > LARGE_UPLOAD_THRESHOLD_BYTES) {
+      await startMultipartUpload(selectedUploadFile);
       return;
     }
 
-    await startDirectUpload(file);
+    await startDirectUpload(selectedUploadFile);
   };
 
   const pauseMultipartUpload = () => {
@@ -370,13 +482,22 @@ export default function VideosPage() {
     setUploadStatus('2/3: Uploading parts...');
   };
 
-  const handleDelete = async (id: string) => {
-    if (!confirm('Are you sure you want to delete this video?')) return;
+  const handleDelete = async () => {
+    if (!videoToDelete) return;
+
+    setDeletingVideoId(videoToDelete.id);
+
     try {
-      await sourceVideosApi.delete(id);
-      setVideos(videos.filter((video) => video.id !== id));
+      await sourceVideosApi.delete(videoToDelete.id);
+      setVideos((currentVideos) => currentVideos.filter((video) => video.id !== videoToDelete.id));
+      if (previewVideo?.id === videoToDelete.id) {
+        setPreviewVideo(null);
+      }
+      setVideoToDelete(null);
     } catch (error) {
       console.error('Failed to delete:', error);
+    } finally {
+      setDeletingVideoId(null);
     }
   };
 
@@ -391,72 +512,126 @@ export default function VideosPage() {
     return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   };
 
+  const formatDateTime = (value: string) =>
+    new Date(value).toLocaleString(undefined, {
+      year: 'numeric',
+      month: 'numeric',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: true,
+    });
+
   return (
     <DashboardLayout>
+      <ConfirmDialog
+        open={!!videoToDelete}
+        title="Delete video?"
+        description={
+          videoToDelete
+            ? `"${videoToDelete.title}" will be permanently removed from your source videos.`
+            : ''
+        }
+        confirmLabel="Delete Video"
+        loading={deletingVideoId === videoToDelete?.id}
+        onClose={() => {
+          if (!deletingVideoId) {
+            setVideoToDelete(null);
+          }
+        }}
+        onConfirm={() => {
+          void handleDelete();
+        }}
+      />
+
       <div className="flex items-center justify-between mb-8">
         <div>
           <h1 className="text-3xl font-bold text-white mb-2">Source Videos</h1>
           <p className="text-slate-400">Upload and manage your source videos</p>
         </div>
+        <Button onClick={openUploadModal}>
+          <Upload className="w-5 h-5" />
+          Upload Video
+        </Button>
       </div>
 
-      <Card className="mb-8">
-        <CardContent className="p-0">
+      {uploadModalOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/85 p-4 backdrop-blur-md"
+          onClick={() => {
+            if (!uploading) {
+              closeUploadModal();
+            }
+          }}
+        >
           <div
-            className={`
-              relative border-2 border-dashed rounded-xl p-12
-              transition-all duration-200 cursor-pointer
-              ${dragOver ? 'border-violet-500 bg-violet-500/10' : 'border-slate-700 hover:border-slate-600'}
-              ${uploading ? 'pointer-events-none opacity-90' : ''}
-            `}
-            onDragOver={(e) => {
-              e.preventDefault();
-              if (!uploading) setDragOver(true);
-            }}
-            onDragLeave={() => setDragOver(false)}
-            onDrop={(e) => {
-              e.preventDefault();
-              if (uploading) return;
-              setDragOver(false);
-              void handleUpload(e.dataTransfer.files);
-            }}
-            onClick={() => {
-              if (!uploading) fileInputRef.current?.click();
-            }}
+            className="w-full max-w-6xl overflow-hidden rounded-3xl border border-slate-800 bg-slate-900 shadow-2xl"
+            onClick={(event) => event.stopPropagation()}
           >
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept="video/*"
-              className="hidden"
-              onChange={(e) => {
-                void handleUpload(e.target.files);
-              }}
-            />
+            <div className="flex items-start justify-between gap-4 border-b border-slate-800 px-5 py-4 lg:px-6">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.2em] text-violet-400">
+                  Upload Video
+                </p>
+                <h2 className="mt-1 text-xl font-semibold text-white">Review your file before uploading</h2>
+                <p className="mt-2 text-sm text-slate-400">
+                  Drag a video here or browse from your device, preview it, then start the upload when you are ready.
+                </p>
+              </div>
 
-            <div className="flex flex-col items-center text-center">
-              {uploading ? (
-                <>
-                  <Loader2 className="w-12 h-12 text-violet-500 animate-spin mb-4" />
-                  <p className="text-white font-medium mb-2">
-                    {uploadMode === 'multipart' ? 'Uploading with multipart...' : 'Uploading with direct upload...'}
-                  </p>
-                  <p className="text-slate-400 text-sm mb-4">{uploadStatus}</p>
-                  <div className="w-64 h-2 bg-slate-800 rounded-full overflow-hidden">
-                    <div
-                      className="h-full bg-gradient-to-r from-violet-600 to-indigo-600 transition-all"
-                      style={{ width: `${uploadProgress}%` }}
-                    />
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={closeUploadModal}
+                disabled={uploading}
+              >
+                <X className="w-4 h-4" />
+                Close
+              </Button>
+            </div>
+
+            <div className="grid gap-6 p-4 lg:grid-cols-[0.95fr_1.35fr] lg:p-6">
+              <div className="space-y-4">
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="video/*"
+                  className="hidden"
+                  onChange={(e) => {
+                    prepareUpload(e.target.files);
+                  }}
+                />
+
+                <div
+                  className={`
+                    relative rounded-2xl border-2 border-dashed p-8 text-center transition-all duration-200
+                    ${dragOver ? 'border-violet-500 bg-violet-500/10' : 'border-slate-700 hover:border-slate-600'}
+                    ${uploading ? 'pointer-events-none opacity-90' : 'cursor-pointer'}
+                  `}
+                  onDragOver={(e) => {
+                    e.preventDefault();
+                    if (!uploading) setDragOver(true);
+                  }}
+                  onDragLeave={() => setDragOver(false)}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    if (uploading) return;
+                    prepareUpload(e.dataTransfer.files);
+                  }}
+                  onClick={() => {
+                    if (!uploading) fileInputRef.current?.click();
+                  }}
+                >
+                  <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-violet-500/20">
+                    {uploading ? (
+                      <Loader2 className="h-8 w-8 animate-spin text-violet-500" />
+                    ) : (
+                      <Upload className="h-8 w-8 text-violet-500" />
+                    )}
                   </div>
-                  <p className="text-slate-500 text-sm mt-2">{uploadProgress}%</p>
-                </>
-              ) : (
-                <>
-                  <div className="w-16 h-16 rounded-2xl bg-violet-500/20 flex items-center justify-center mb-4">
-                    <Upload className="w-8 h-8 text-violet-500" />
-                  </div>
+
                   <p className="text-white font-medium mb-1">
-                    Drop your video here or click to browse
+                    {selectedUploadFile ? selectedUploadFile.name : 'Drop your video here or click to browse'}
                   </p>
                   <p className="text-slate-500 text-sm">
                     Supports MP4, MOV, WebM up to 2GB
@@ -464,54 +639,116 @@ export default function VideosPage() {
                   <p className="text-slate-500 text-sm mt-1">
                     Files larger than {Math.round(LARGE_UPLOAD_THRESHOLD_BYTES / (1024 * 1024))} MB automatically use multipart upload.
                   </p>
-                </>
-              )}
+                </div>
+
+                {selectedUploadFile && (
+                  <div className="rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
+                    <div className="flex flex-wrap items-center gap-3 text-sm text-slate-300">
+                      <span className="font-medium text-white">{selectedUploadFile.name}</span>
+                      <span>{formatSize(selectedUploadFile.size)}</span>
+                      <span>{selectedUploadFile.type || 'video/*'}</span>
+                    </div>
+                    <div className="mt-4 flex flex-wrap gap-3">
+                      <Button
+                        onClick={() => {
+                          void handleUpload();
+                        }}
+                        loading={uploading}
+                        disabled={!selectedUploadFile}
+                      >
+                        <Upload className="w-4 h-4" />
+                        {uploading ? 'Uploading...' : 'Start Upload'}
+                      </Button>
+                      <Button
+                        variant="secondary"
+                        onClick={() => fileInputRef.current?.click()}
+                        disabled={uploading}
+                      >
+                        <RotateCcw className="w-4 h-4" />
+                        Choose Another
+                      </Button>
+                    </div>
+                  </div>
+                )}
+
+                {(uploading || uploadStatus || lastUpload) && (
+                  <div className="rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
+                    {uploadMode === 'multipart' && uploading && (
+                      <div className="mb-4 flex flex-wrap gap-3">
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          onClick={pauseMultipartUpload}
+                          disabled={multipartPaused}
+                        >
+                          <Pause className="w-4 h-4" />
+                          Pause
+                        </Button>
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          onClick={resumeMultipartUpload}
+                          disabled={!multipartPaused}
+                        >
+                          <RotateCcw className="w-4 h-4" />
+                          Resume
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => {
+                            void abortMultipartUpload();
+                          }}
+                        >
+                          <X className="w-4 h-4" />
+                          Cancel
+                        </Button>
+                      </div>
+                    )}
+
+                    {uploadStatus && (
+                      <p className="text-sm text-slate-300">{uploadStatus}</p>
+                    )}
+
+                    {(uploading || uploadProgress > 0) && (
+                      <>
+                        <div className="mt-4 h-2 overflow-hidden rounded-full bg-slate-800">
+                          <div
+                            className="h-full bg-gradient-to-r from-violet-600 to-indigo-600 transition-all"
+                            style={{ width: `${uploadProgress}%` }}
+                          />
+                        </div>
+                        <p className="mt-2 text-sm text-slate-500">{uploadProgress}%</p>
+                      </>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              <div className="rounded-3xl border border-slate-800 bg-slate-950/40 p-4 lg:p-5">
+                <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">
+                  Video Preview
+                </p>
+                <div className="mt-4 overflow-hidden rounded-2xl border border-slate-800 bg-black">
+                  {selectedUploadPreviewUrl ? (
+                    <video
+                      key={selectedUploadPreviewUrl}
+                      src={selectedUploadPreviewUrl}
+                      controls
+                      playsInline
+                      className="w-full max-h-[70vh] bg-black"
+                    />
+                  ) : (
+                    <div className="flex aspect-video items-center justify-center bg-slate-900 text-slate-500">
+                      Select a video to preview it before upload
+                    </div>
+                  )}
+                </div>
+              </div>
             </div>
           </div>
-
-          {(uploading || uploadStatus || lastUpload) && (
-            <div className="border-t border-slate-800 px-6 py-5">
-              {uploadMode === 'multipart' && uploading && (
-                <div className="flex flex-wrap gap-3 mb-4">
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    onClick={pauseMultipartUpload}
-                    disabled={multipartPaused}
-                  >
-                    <Pause className="w-4 h-4" />
-                    Pause
-                  </Button>
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    onClick={resumeMultipartUpload}
-                    disabled={!multipartPaused}
-                  >
-                    <RotateCcw className="w-4 h-4" />
-                    Resume
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => {
-                      void abortMultipartUpload();
-                    }}
-                  >
-                    <X className="w-4 h-4" />
-                    Cancel
-                  </Button>
-                </div>
-              )}
-
-              {uploadStatus && (
-                <p className="text-sm text-slate-300">{uploadStatus}</p>
-              )}
-
-            </div>
-          )}
-        </CardContent>
-      </Card>
+        </div>
+      )}
 
       {previewVideo && (
         <div
@@ -576,13 +813,17 @@ export default function VideosPage() {
               <Video className="w-10 h-10 text-slate-600" />
             </div>
             <h3 className="text-xl font-semibold text-white mb-2">No videos yet</h3>
-            <p className="text-slate-400">Upload your first video to get started</p>
+            <p className="text-slate-400 mb-6">Upload your first video to get started</p>
+            <Button onClick={openUploadModal}>
+              <Upload className="w-5 h-5" />
+              Upload Video
+            </Button>
           </CardContent>
         </Card>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
           {videos.map((video) => (
-            <Card key={video.id} hover className="group overflow-hidden">
+            <Card key={video.id} hover className="overflow-hidden">
               <div className="aspect-video bg-slate-800 relative overflow-hidden">
                 <VideoThumbnail
                   videoUrl={video.video_url}
@@ -592,21 +833,17 @@ export default function VideosPage() {
                   fallbackIconClassName="w-12 h-12 text-slate-600"
                 />
 
-                <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-3">
-                  <button
-                    onClick={() => setPreviewVideo(video)}
-                    className="p-3 rounded-full bg-white/20 hover:bg-white/30 transition-colors"
-                    aria-label={`Preview ${video.title}`}
-                  >
-                    <Play className="w-6 h-6 text-white" />
-                  </button>
-                  <button
-                    onClick={() => handleDelete(video.id)}
-                    className="p-3 rounded-full bg-red-500/20 hover:bg-red-500/30 transition-colors"
-                  >
-                    <Trash2 className="w-6 h-6 text-red-400" />
-                  </button>
-                </div>
+                <div className="absolute inset-0 bg-gradient-to-t from-slate-950/70 via-slate-950/10 to-slate-950/10" />
+
+                <button
+                  onClick={() => setPreviewVideo(video)}
+                  className="absolute inset-0 flex items-center justify-center"
+                  aria-label={`Preview ${video.title}`}
+                >
+                  <span className="flex h-16 w-16 items-center justify-center rounded-full border border-white/20 bg-slate-950/70 text-white shadow-2xl shadow-black/40 transition-transform duration-200 hover:scale-105">
+                    <Play className="ml-1 h-7 w-7" />
+                  </span>
+                </button>
 
                 {video.duration_ms && (
                   <div className="absolute bottom-2 right-2 px-2 py-1 rounded bg-black/70 text-white text-xs font-medium">
@@ -617,20 +854,30 @@ export default function VideosPage() {
 
               <CardContent className="p-4">
                 <h3 className="font-medium text-white truncate mb-2">{video.title}</h3>
-                <div className="flex items-center gap-4 text-sm text-slate-500">
-                  {video.width && video.height && (
-                    <span>{video.width}×{video.height}</span>
-                  )}
-                  {video.file_size_bytes && (
+                <div className="flex items-start justify-between gap-4">
+                  <div className="flex flex-wrap items-center gap-4 text-sm text-slate-500">
+                    {video.width && video.height && (
+                      <span>{video.width}×{video.height}</span>
+                    )}
+                    {video.file_size_bytes && (
+                      <span className="flex items-center gap-1">
+                        <HardDrive className="w-3 h-3" />
+                        {formatSize(video.file_size_bytes)}
+                      </span>
+                    )}
                     <span className="flex items-center gap-1">
-                      <HardDrive className="w-3 h-3" />
-                      {formatSize(video.file_size_bytes)}
+                      <Clock className="w-3 h-3" />
+                      {formatDateTime(video.created_at)}
                     </span>
-                  )}
-                  <span className="flex items-center gap-1">
-                    <Clock className="w-3 h-3" />
-                    {new Date(video.created_at).toLocaleDateString()}
-                  </span>
+                  </div>
+
+                  <button
+                    onClick={() => setVideoToDelete(video)}
+                    className="rounded-lg p-2 text-slate-500 transition-colors hover:bg-slate-900 hover:text-red-400"
+                    aria-label={`Delete ${video.title}`}
+                  >
+                    <Trash2 className="w-5 h-5" />
+                  </button>
                 </div>
               </CardContent>
             </Card>

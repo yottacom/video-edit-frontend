@@ -6,21 +6,55 @@ import { DashboardLayout } from '@/components/layout/DashboardLayout';
 import { Card, CardContent, CardHeader } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
+import { authApi } from '@/lib/api';
 import { useAuthStore } from '@/lib/store';
+
+function getErrorMessage(error: unknown) {
+  if (
+    error &&
+    typeof error === 'object' &&
+    'response' in error &&
+    error.response &&
+    typeof error.response === 'object' &&
+    'data' in error.response
+  ) {
+    const data = error.response.data;
+    if (data && typeof data === 'object' && 'detail' in data) {
+      const detail = data.detail;
+      return typeof detail === 'string' ? detail : JSON.stringify(detail);
+    }
+  }
+
+  if (error && typeof error === 'object' && 'message' in error && typeof error.message === 'string') {
+    return error.message;
+  }
+
+  return 'Unable to update password.';
+}
 
 export default function SettingsPage() {
   const { user } = useAuthStore();
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [saving, setSaving] = useState(false);
+  const [passwordError, setPasswordError] = useState('');
+  const [passwordSuccess, setPasswordSuccess] = useState('');
 
   const handleSavePassword = async () => {
+    setPasswordError('');
+    setPasswordSuccess('');
     setSaving(true);
-    // TODO: Implement password change
-    await new Promise(resolve => setTimeout(resolve, 1000));
-    setSaving(false);
-    setCurrentPassword('');
-    setNewPassword('');
+
+    try {
+      await authApi.changePassword(currentPassword, newPassword);
+      setCurrentPassword('');
+      setNewPassword('');
+      setPasswordSuccess('Password updated successfully.');
+    } catch (error) {
+      setPasswordError(getErrorMessage(error));
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
@@ -63,6 +97,16 @@ export default function SettingsPage() {
             </div>
           </CardHeader>
           <CardContent className="space-y-4">
+            {passwordError && (
+              <div className="rounded-lg border border-red-500/20 bg-red-500/10 p-3 text-sm text-red-300">
+                {passwordError}
+              </div>
+            )}
+            {passwordSuccess && (
+              <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/10 p-3 text-sm text-emerald-300">
+                {passwordSuccess}
+              </div>
+            )}
             <Input
               type="password"
               label="Current Password"

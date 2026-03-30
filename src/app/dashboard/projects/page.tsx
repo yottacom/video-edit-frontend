@@ -7,6 +7,7 @@ import { InlineVideoPlayer } from '@/components/media/InlineVideoPlayer';
 import { DashboardLayout } from '@/components/layout/DashboardLayout';
 import { Card, CardContent } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
+import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { projectsApi } from '@/lib/api';
 import { EditProject } from '@/types';
 
@@ -31,6 +32,8 @@ export default function ProjectsPage() {
   const [projects, setProjects] = useState<EditProject[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [projectToDelete, setProjectToDelete] = useState<EditProject | null>(null);
+  const [deletingProjectId, setDeletingProjectId] = useState<string | null>(null);
   const pollTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const didInitialLoadRef = useRef(false);
 
@@ -146,19 +149,44 @@ export default function ProjectsPage() {
     };
   }, [hasProcessingProjects]);
 
-  const handleDelete = async (id: string) => {
-    if (!confirm('Are you sure you want to delete this project?')) return;
+  const handleDelete = async () => {
+    if (!projectToDelete) return;
+
+    setDeletingProjectId(projectToDelete.id);
 
     try {
-      await projectsApi.delete(id);
-      setProjects((currentProjects) => currentProjects.filter((project) => project.id !== id));
+      await projectsApi.delete(projectToDelete.id);
+      setProjects((currentProjects) => currentProjects.filter((project) => project.id !== projectToDelete.id));
+      setProjectToDelete(null);
     } catch (error) {
       console.error('Failed to delete project:', error);
+    } finally {
+      setDeletingProjectId(null);
     }
   };
 
   return (
     <DashboardLayout>
+      <ConfirmDialog
+        open={!!projectToDelete}
+        title="Delete project?"
+        description={
+          projectToDelete
+            ? `"${projectToDelete.title}" and its generated outputs will be permanently removed.`
+            : ''
+        }
+        confirmLabel="Delete Project"
+        loading={deletingProjectId === projectToDelete?.id}
+        onClose={() => {
+          if (!deletingProjectId) {
+            setProjectToDelete(null);
+          }
+        }}
+        onConfirm={() => {
+          void handleDelete();
+        }}
+      />
+
       <div className="mb-8 flex items-center justify-between">
         <div>
           <h1 className="mb-2 text-3xl font-bold text-white">Projects</h1>
@@ -253,7 +281,7 @@ export default function ProjectsPage() {
                       </div>
                     </div>
                     <button
-                      onClick={() => handleDelete(project.id)}
+                      onClick={() => setProjectToDelete(project)}
                       className="rounded-lg p-2 text-slate-500 transition-colors hover:bg-slate-900 hover:text-red-400"
                       aria-label={`Delete ${project.title}`}
                     >
@@ -316,12 +344,6 @@ export default function ProjectsPage() {
                       </a>
                     )}
                   </div>
-
-                  {project.status === 'failed' && project.error_message && (
-                    <div className="mt-4 rounded-lg border border-red-500/20 bg-red-500/10 p-3 text-sm text-red-300">
-                      {project.error_message}
-                    </div>
-                  )}
                 </CardContent>
               </Card>
             );

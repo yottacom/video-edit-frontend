@@ -21,7 +21,7 @@ declare module 'axios' {
 }
 
 // Helper to serialize request body for debug
-function serializeRequestBody(data: any): any {
+function serializeRequestBody(data: unknown): unknown {
   if (!data) return null;
   if (data instanceof URLSearchParams) {
     const obj: Record<string, string> = {};
@@ -41,13 +41,18 @@ function serializeRequestBody(data: any): any {
 }
 
 // Helper to serialize headers for debug (include auth)
-function serializeHeaders(headers: any): Record<string, string> {
+function serializeHeaders(headers: unknown): Record<string, string> {
   const obj: Record<string, string> = {};
   if (!headers) return obj;
   
   // Handle AxiosHeaders class (has toJSON method)
-  if (typeof headers.toJSON === 'function') {
-    const json = headers.toJSON();
+  if (
+    typeof headers === 'object' &&
+    headers !== null &&
+    'toJSON' in headers &&
+    typeof headers.toJSON === 'function'
+  ) {
+    const json = headers.toJSON() as Record<string, string | string[]>;
     Object.entries(json).forEach(([key, value]) => {
       if (typeof value === 'string') {
         obj[key] = value;
@@ -59,12 +64,13 @@ function serializeHeaders(headers: any): Record<string, string> {
   }
   
   // Fallback for plain objects
-  Object.keys(headers).forEach((key) => {
-    const value = headers[key];
-    if (typeof value === 'string') {
-      obj[key] = value;
-    }
-  });
+  if (typeof headers === 'object' && headers !== null) {
+    Object.entries(headers).forEach(([key, value]) => {
+      if (typeof value === 'string') {
+        obj[key] = value;
+      }
+    });
+  }
   return obj;
 }
 
@@ -119,7 +125,13 @@ api.interceptors.response.use(
       });
     }
     
-    if (error.response?.status === 401) {
+    const requestUrl = typeof error.config?.url === 'string' ? error.config.url : '';
+    const isAuthRequest =
+      requestUrl.startsWith('/auth/login') ||
+      requestUrl.startsWith('/auth/signup/') ||
+      requestUrl.startsWith('/auth/users/me');
+
+    if (error.response?.status === 401 && !isAuthRequest) {
       if (typeof window !== 'undefined') {
         localStorage.removeItem('token');
         window.location.href = '/auth/login';
@@ -135,17 +147,14 @@ api.interceptors.response.use(
 
 export const authApi = {
   login: async (email: string, password: string) => {
-    const formData = new URLSearchParams();
-    formData.append('username', email);
-    formData.append('password', password);
-    
-    const res = await api.post('/token', formData, {
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    const res = await api.post('/auth/login', {
+      email,
+      password,
     });
     
     // Save token immediately so subsequent requests can use it
-    if (res.data.access_token && typeof window !== 'undefined') {
-      localStorage.setItem('token', res.data.access_token);
+    if (res.data?.token?.access_token && typeof window !== 'undefined') {
+      localStorage.setItem('token', res.data.token.access_token);
     }
     
     return res.data;
@@ -153,6 +162,14 @@ export const authApi = {
   
   signup: async (email: string, password: string) => {
     const res = await api.post('/auth/signup/', { email, password });
+    return res.data;
+  },
+
+  changePassword: async (currentPassword: string, newPassword: string) => {
+    const res = await api.post('/auth/change-password', {
+      current_password: currentPassword,
+      new_password: newPassword,
+    });
     return res.data;
   },
   

@@ -1,6 +1,6 @@
 'use client';
 
-import { ReactNode, useEffect } from 'react';
+import { ReactNode, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { 
@@ -14,6 +14,8 @@ import {
   Sparkles,
   ChevronRight
 } from 'lucide-react';
+import { Button } from '@/components/ui/Button';
+import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { useAuthStore, useUIStore } from '@/lib/store';
 
 interface DashboardLayoutProps {
@@ -33,6 +35,7 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
   const router = useRouter();
   const { user, isAuthenticated, hasHydrated, logout } = useAuthStore();
   const { sidebarOpen, toggleSidebar } = useUIStore();
+  const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
 
   useEffect(() => {
     if (!hasHydrated) {
@@ -63,6 +66,18 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
 
   return (
     <div className="min-h-screen bg-slate-950">
+      <ConfirmDialog
+        open={showLogoutConfirm}
+        title="Logout?"
+        description="You will be signed out of your account and redirected to the login page."
+        confirmLabel="Logout"
+        onClose={() => setShowLogoutConfirm(false)}
+        onConfirm={() => {
+          setShowLogoutConfirm(false);
+          handleLogout();
+        }}
+      />
+
       {/* Mobile Header */}
       <header className="lg:hidden fixed top-0 left-0 right-0 z-50 bg-slate-900/95 backdrop-blur-sm border-b border-slate-800">
         <div className="flex items-center justify-between px-4 h-16">
@@ -125,25 +140,29 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
 
         {/* User Section */}
         <div className="absolute bottom-0 left-0 right-0 p-4 border-t border-slate-800">
-          <div className="flex items-center gap-3 px-4 py-3 rounded-lg bg-slate-800/50">
-            <div className="w-10 h-10 rounded-full bg-gradient-to-br from-violet-500 to-indigo-500 flex items-center justify-center">
-              <span className="text-white font-medium">
-                {user?.email?.charAt(0).toUpperCase() || 'U'}
-              </span>
+          <div className="space-y-3">
+            <div className="flex items-center gap-3 rounded-xl border border-slate-800 bg-slate-800/50 px-4 py-3">
+              <div className="flex h-10 w-10 items-center justify-center rounded-full bg-gradient-to-br from-violet-500 to-indigo-500">
+                <span className="text-white font-medium">
+                  {user?.email?.charAt(0).toUpperCase() || 'U'}
+                </span>
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-sm font-medium text-white">
+                  {user?.email || 'User'}
+                </p>
+                <p className="text-xs text-slate-500">Free Plan</p>
+              </div>
             </div>
-            <div className="flex-1 min-w-0">
-              <p className="text-sm font-medium text-white truncate">
-                {user?.email || 'User'}
-              </p>
-              <p className="text-xs text-slate-500">Free Plan</p>
-            </div>
-            <button 
-              onClick={handleLogout}
-              className="p-2 text-slate-400 hover:text-red-400 transition-colors"
-              title="Logout"
+
+            <Button
+              variant="danger"
+              className="w-full justify-center"
+              onClick={() => setShowLogoutConfirm(true)}
             >
               <LogOut size={18} />
-            </button>
+              Logout
+            </Button>
           </div>
         </div>
       </aside>

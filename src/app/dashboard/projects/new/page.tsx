@@ -3,10 +3,11 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { 
-  ArrowLeft, ArrowRight, Video, Type, Music, Scissors, 
-  Sparkles, Check, Loader2, Play 
+  ArrowLeft, ArrowRight, Video, Type, Music, Scissors,
+  Sparkles, Check, Loader2, FileText, AudioLines, Tag
 } from 'lucide-react';
 import { DashboardLayout } from '@/components/layout/DashboardLayout';
+import { InlineVideoPlayer } from '@/components/media/InlineVideoPlayer';
 import { VideoThumbnail } from '@/components/media/VideoThumbnail';
 import { Card, CardContent } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
@@ -24,6 +25,14 @@ const steps: { id: Step; label: string; icon: React.ElementType }[] = [
   { id: 'shorts', label: 'Shorts', icon: Scissors },
   { id: 'review', label: 'Review', icon: Check },
 ];
+
+function formatDuration(ms: number | null) {
+  if (!ms) return 'Unknown';
+
+  const minutes = Math.floor(ms / 60000);
+  const seconds = Math.floor((ms % 60000) / 1000);
+  return `${minutes}:${seconds.toString().padStart(2, '0')}`;
+}
 
 export default function NewProjectPage() {
   const router = useRouter();
@@ -360,56 +369,193 @@ export default function NewProjectPage() {
         
         return (
           <div className="space-y-6">
-            <h3 className="text-lg font-semibold text-white">Project Summary</h3>
-            
-            <div className="grid gap-4">
-              <Card>
-                <CardContent className="p-4 flex justify-between">
-                  <span className="text-slate-400">Title</span>
-                  <span className="text-white font-medium">{projectTitle || 'Untitled Project'}</span>
-                </CardContent>
-              </Card>
-              
-              <Card>
-                <CardContent className="p-4 flex justify-between">
-                  <span className="text-slate-400">Source Video</span>
-                  <span className="text-white font-medium">{selectedVideoData?.title}</span>
-                </CardContent>
-              </Card>
-              
-              <Card>
-                <CardContent className="p-4 flex justify-between">
-                  <span className="text-slate-400">Subtitle Style</span>
-                  <span className="text-white font-medium capitalize">{subtitleStyle}</span>
-                </CardContent>
-              </Card>
-              
-              <Card>
-                <CardContent className="p-4 flex justify-between">
-                  <span className="text-slate-400">B-Roll</span>
-                  <span className={addBroll ? 'text-green-400' : 'text-slate-500'}>
-                    {addBroll ? `Enabled${brollSfx ? ' + SFX' : ''}` : 'Disabled'}
-                  </span>
-                </CardContent>
-              </Card>
-              
-              <Card>
-                <CardContent className="p-4 flex justify-between">
-                  <span className="text-slate-400">Music</span>
-                  <span className="text-white font-medium">
-                    {selectedMusicData?.title || 'None'}
-                  </span>
-                </CardContent>
-              </Card>
-              
-              <Card>
-                <CardContent className="p-4 flex justify-between">
-                  <span className="text-slate-400">Shorts</span>
-                  <span className={generateShorts ? 'text-cyan-400' : 'text-slate-500'}>
-                    {generateShorts ? `${shortsCount} clips` : 'Disabled'}
-                  </span>
-                </CardContent>
-              </Card>
+            <div className="flex items-center gap-3">
+              <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-violet-500/15 text-violet-300">
+                <Check className="h-6 w-6" />
+              </div>
+              <div>
+                <h3 className="text-xl font-semibold text-white">Project Summary</h3>
+                <p className="text-sm text-slate-400">Review your media and project settings before creating the job.</p>
+              </div>
+            </div>
+
+            <div className="grid gap-6 xl:grid-cols-[1.3fr_0.9fr]">
+              <div className="space-y-6">
+                <Card>
+                  <CardContent className="p-5">
+                    <div className="mb-4 flex items-center gap-3">
+                      <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-slate-800 text-violet-300">
+                        <FileText className="h-5 w-5" />
+                      </div>
+                      <div>
+                        <p className="text-sm text-slate-400">Project Title</p>
+                        <h4 className="text-lg font-semibold text-white">{projectTitle || 'Untitled Project'}</h4>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+
+                <Card>
+                  <CardContent className="p-5">
+                    <div className="mb-4 flex items-center gap-3">
+                      <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-slate-800 text-cyan-300">
+                        <Video className="h-5 w-5" />
+                      </div>
+                      <div>
+                        <p className="text-sm text-slate-400">Source Video</p>
+                        <h4 className="text-lg font-semibold text-white">{selectedVideoData?.title || 'No video selected'}</h4>
+                      </div>
+                    </div>
+
+                    {selectedVideoData && (
+                      <>
+                        <InlineVideoPlayer
+                          key={selectedVideoData.id}
+                          videoUrl={selectedVideoData.video_url}
+                          thumbnailUrl={selectedVideoData.thumbnail_url}
+                          title={selectedVideoData.title}
+                        />
+                        <div className="mt-4 flex flex-wrap gap-2">
+                          {selectedVideoData.duration_ms && (
+                            <span className="rounded-full bg-slate-800 px-3 py-1 text-xs text-slate-300">
+                              {formatDuration(selectedVideoData.duration_ms)}
+                            </span>
+                          )}
+                          {selectedVideoData.width && selectedVideoData.height && (
+                            <span className="rounded-full bg-slate-800 px-3 py-1 text-xs text-slate-300">
+                              {selectedVideoData.width}x{selectedVideoData.height}
+                            </span>
+                          )}
+                        </div>
+                      </>
+                    )}
+                  </CardContent>
+                </Card>
+
+                <Card>
+                  <CardContent className="p-5">
+                    <div className="mb-4 flex items-center gap-3">
+                      <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-slate-800 text-emerald-300">
+                        <AudioLines className="h-5 w-5" />
+                      </div>
+                      <div>
+                        <p className="text-sm text-slate-400">Music Preview</p>
+                        <h4 className="text-lg font-semibold text-white">{selectedMusicData?.title || 'No music selected'}</h4>
+                      </div>
+                    </div>
+
+                    {selectedMusicData ? (
+                      <div className="rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
+                        <audio controls preload="metadata" src={selectedMusicData.audio_url} className="w-full" />
+                        <div className="mt-4 flex flex-wrap gap-2">
+                          <span className="rounded-full bg-slate-800 px-3 py-1 text-xs text-slate-300">
+                            {selectedMusicData.track_type}
+                          </span>
+                          {selectedMusicData.duration_ms && (
+                            <span className="rounded-full bg-slate-800 px-3 py-1 text-xs text-slate-300">
+                              {formatDuration(selectedMusicData.duration_ms)}
+                            </span>
+                          )}
+                          {selectedMusicData.mood && (
+                            <span className="rounded-full bg-slate-800 px-3 py-1 text-xs capitalize text-slate-300">
+                              {selectedMusicData.mood}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="rounded-2xl border border-dashed border-slate-800 bg-slate-950/30 p-5 text-sm text-slate-500">
+                        No background music will be attached to this project.
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+              </div>
+
+              <div className="space-y-6">
+                <Card>
+                  <CardContent className="p-5">
+                    <div className="mb-4 flex items-center gap-3">
+                      <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-slate-800 text-amber-300">
+                        <Tag className="h-5 w-5" />
+                      </div>
+                      <div>
+                        <p className="text-sm text-slate-400">Configuration Tags</p>
+                        <h4 className="text-lg font-semibold text-white">Processing Setup</h4>
+                      </div>
+                    </div>
+
+                    <div className="flex flex-wrap gap-2">
+                      <span className="inline-flex items-center gap-2 rounded-full bg-violet-500/15 px-3 py-1.5 text-sm text-violet-200">
+                        <Type className="h-4 w-4" />
+                        {subtitleStyle}
+                      </span>
+                      <span className={`inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-sm ${addBroll ? 'bg-emerald-500/15 text-emerald-200' : 'bg-slate-800 text-slate-400'}`}>
+                        <Sparkles className="h-4 w-4" />
+                        {addBroll ? 'B-Roll enabled' : 'B-Roll disabled'}
+                      </span>
+                      <span className={`inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-sm ${brollSfx ? 'bg-fuchsia-500/15 text-fuchsia-200' : 'bg-slate-800 text-slate-400'}`}>
+                        <Sparkles className="h-4 w-4" />
+                        {brollSfx ? 'SFX on' : 'SFX off'}
+                      </span>
+                      <span className={`inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-sm ${selectedMusicData ? 'bg-cyan-500/15 text-cyan-200' : 'bg-slate-800 text-slate-400'}`}>
+                        <Music className="h-4 w-4" />
+                        {selectedMusicData ? 'Music selected' : 'No music'}
+                      </span>
+                      <span className={`inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-sm ${generateShorts ? 'bg-orange-500/15 text-orange-200' : 'bg-slate-800 text-slate-400'}`}>
+                        <Scissors className="h-4 w-4" />
+                        {generateShorts ? `${shortsCount} shorts` : 'Shorts disabled'}
+                      </span>
+                    </div>
+                  </CardContent>
+                </Card>
+
+                <Card>
+                  <CardContent className="p-5">
+                    <div className="space-y-4">
+                      <div className="flex items-center justify-between rounded-2xl bg-slate-900/70 px-4 py-3">
+                        <div className="flex items-center gap-3">
+                          <Type className="h-4 w-4 text-violet-300" />
+                          <span className="text-sm text-slate-400">Subtitle Style</span>
+                        </div>
+                        <span className="rounded-full bg-violet-500/15 px-3 py-1 text-xs font-medium text-violet-200">
+                          {subtitleStyle}
+                        </span>
+                      </div>
+
+                      <div className="flex items-center justify-between rounded-2xl bg-slate-900/70 px-4 py-3">
+                        <div className="flex items-center gap-3">
+                          <Sparkles className="h-4 w-4 text-emerald-300" />
+                          <span className="text-sm text-slate-400">B-Roll</span>
+                        </div>
+                        <span className={`rounded-full px-3 py-1 text-xs font-medium ${addBroll ? 'bg-emerald-500/15 text-emerald-200' : 'bg-slate-800 text-slate-400'}`}>
+                          {addBroll ? `Enabled${brollSfx ? ' + SFX' : ''}` : 'Disabled'}
+                        </span>
+                      </div>
+
+                      <div className="flex items-center justify-between rounded-2xl bg-slate-900/70 px-4 py-3">
+                        <div className="flex items-center gap-3">
+                          <Music className="h-4 w-4 text-cyan-300" />
+                          <span className="text-sm text-slate-400">Music</span>
+                        </div>
+                        <span className={`rounded-full px-3 py-1 text-xs font-medium ${selectedMusicData ? 'bg-cyan-500/15 text-cyan-200' : 'bg-slate-800 text-slate-400'}`}>
+                          {selectedMusicData ? selectedMusicData.title : 'None'}
+                        </span>
+                      </div>
+
+                      <div className="flex items-center justify-between rounded-2xl bg-slate-900/70 px-4 py-3">
+                        <div className="flex items-center gap-3">
+                          <Scissors className="h-4 w-4 text-orange-300" />
+                          <span className="text-sm text-slate-400">Shorts</span>
+                        </div>
+                        <span className={`rounded-full px-3 py-1 text-xs font-medium ${generateShorts ? 'bg-orange-500/15 text-orange-200' : 'bg-slate-800 text-slate-400'}`}>
+                          {generateShorts ? `${shortsCount} clips` : 'Disabled'}
+                        </span>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              </div>
             </div>
           </div>
         );

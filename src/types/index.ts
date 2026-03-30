@@ -56,6 +56,21 @@ export type ProjectStatus =
   | 'completed' 
   | 'failed';
 
+export interface ProjectShort {
+  id: string;
+  title: string;
+  order: number;
+  status: ProjectStatus;
+  progress: number;
+  segments: unknown[];
+  total_duration_ms: number | null;
+  output_url: string | null;
+  thumbnail_url: string | null;
+  error: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface EditProject {
   id: string;
   title: string;
@@ -65,6 +80,7 @@ export interface EditProject {
   config: ProjectConfig;
   output_url: string | null;
   error_message: string | null;
+  shorts?: ProjectShort[];
   created_at: string;
   updated_at: string;
 }

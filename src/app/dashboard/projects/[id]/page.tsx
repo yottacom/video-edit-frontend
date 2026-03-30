@@ -3,12 +3,13 @@
 import { useCallback, useEffect, useEffectEvent, useRef, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { 
-  ArrowLeft, Download, ExternalLink, 
+  ArrowLeft, Download, ExternalLink, AudioLines,
   Loader2, CheckCircle, XCircle, Clock, Sparkles,
-  Video, Music, Type, Scissors, RefreshCw
+  Video, Music, Type, Scissors, RefreshCw, Tag, Play, X
 } from 'lucide-react';
 import { DashboardLayout } from '@/components/layout/DashboardLayout';
 import { InlineVideoPlayer } from '@/components/media/InlineVideoPlayer';
+import { VideoThumbnail } from '@/components/media/VideoThumbnail';
 import { Card, CardContent } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { projectsApi, sourceVideosApi, musicTracksApi } from '@/lib/api';
@@ -33,6 +34,7 @@ export default function ProjectDetailPage() {
   const [project, setProject] = useState<EditProject | null>(null);
   const [sourceVideo, setSourceVideo] = useState<SourceVideo | null>(null);
   const [musicTrack, setMusicTrack] = useState<MusicTrack | null>(null);
+  const [selectedShort, setSelectedShort] = useState<NonNullable<EditProject['shorts']>[number] | null>(null);
   const [loading, setLoading] = useState(true);
   const [reprocessing, setReprocessing] = useState(false);
   
@@ -99,6 +101,25 @@ export default function ProjectDetailPage() {
     };
   }, [loadProject]);
 
+  useEffect(() => {
+    if (!selectedShort) return;
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setSelectedShort(null);
+      }
+    };
+
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    window.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [selectedShort]);
+
   // Poll for updates while processing
   const isProjectProcessing = project
     ? ['pending', 'transcribing', 'planning', 'generating', 'rendering'].includes(project.status)
@@ -152,6 +173,7 @@ export default function ProjectDetailPage() {
   const status = statusConfig[project.status] || statusConfig.draft;
   const StatusIcon = status.icon;
   const isProcessing = ['pending', 'transcribing', 'planning', 'generating', 'rendering'].includes(project.status);
+  const projectShorts = project.shorts || [];
   const formatDuration = (ms: number | null) => {
     if (!ms) return null;
 
@@ -159,9 +181,73 @@ export default function ProjectDetailPage() {
     const seconds = Math.floor((ms % 60000) / 1000);
     return `${minutes}:${seconds.toString().padStart(2, '0')}`;
   };
+  const formatDateTime = (value: string) =>
+    new Date(value).toLocaleString(undefined, {
+      year: 'numeric',
+      month: 'numeric',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: true,
+    });
 
   return (
     <DashboardLayout>
+      {selectedShort && selectedShort.output_url && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/85 p-4 backdrop-blur-md"
+          onClick={() => setSelectedShort(null)}
+        >
+          <div
+            className="w-full max-w-5xl overflow-hidden rounded-3xl border border-slate-800 bg-slate-900 shadow-2xl"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-4 border-b border-slate-800 px-5 py-4 lg:px-6">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.2em] text-cyan-400">
+                  Short Preview
+                </p>
+                <h2 className="mt-1 text-xl font-semibold text-white">{selectedShort.title}</h2>
+                <div className="mt-2 flex flex-wrap gap-3 text-sm text-slate-400">
+                  <span>Clip {selectedShort.order + 1}</span>
+                  {formatDuration(selectedShort.total_duration_ms) && (
+                    <span>{formatDuration(selectedShort.total_duration_ms)}</span>
+                  )}
+                  <span>{formatDateTime(selectedShort.created_at)}</span>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <a href={selectedShort.output_url} download>
+                  <Button size="sm">
+                    <Download className="h-4 w-4" />
+                    Download
+                  </Button>
+                </a>
+                <Button variant="ghost" size="sm" onClick={() => setSelectedShort(null)}>
+                  <X className="w-4 h-4" />
+                  Close
+                </Button>
+              </div>
+            </div>
+
+            <div className="p-4 lg:p-6">
+              <div className="overflow-hidden rounded-2xl border border-slate-800 bg-black">
+                <video
+                  key={selectedShort.id}
+                  src={selectedShort.output_url}
+                  poster={selectedShort.thumbnail_url || undefined}
+                  controls
+                  autoPlay
+                  playsInline
+                  className="w-full max-h-[72vh] bg-black"
+                />
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Header */}
       <div className="flex items-center gap-4 mb-8">
         <button 
@@ -295,6 +381,83 @@ export default function ProjectDetailPage() {
               </CardContent>
             </Card>
           )}
+
+          {projectShorts.length > 0 && (
+            <Card>
+              <CardContent className="p-6">
+                <div className="mb-5 flex items-center gap-3">
+                  <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-cyan-500/15 text-cyan-300">
+                    <Scissors className="h-5 w-5" />
+                  </div>
+                  <div>
+                    <h3 className="text-lg font-semibold text-white">Generated Shorts</h3>
+                    <p className="text-sm text-slate-400">Only shown when the backend returns rendered short clips.</p>
+                  </div>
+                </div>
+
+                <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-3">
+                  {projectShorts.map((short) => {
+                    const shortStatus = statusConfig[short.status] || statusConfig.draft;
+                    const ShortStatusIcon = shortStatus.icon;
+
+                    return (
+                      <Card key={short.id} className="overflow-hidden border-slate-700/60 bg-slate-950/30">
+                        <div className="relative border-b border-slate-800 bg-slate-900/70">
+                          <div className="aspect-video overflow-hidden">
+                            <VideoThumbnail
+                              videoUrl={short.output_url}
+                              thumbnailUrl={short.thumbnail_url}
+                              title={short.title}
+                              className="h-full w-full object-cover"
+                              fallbackIconClassName="h-12 w-12 text-white/70"
+                            />
+                          </div>
+                          <div className="absolute inset-0 bg-gradient-to-t from-slate-950/80 via-slate-950/10 to-slate-950/10" />
+                          {short.output_url && (
+                            <button
+                              type="button"
+                              onClick={() => setSelectedShort(short)}
+                              className="absolute inset-0 flex items-center justify-center"
+                              aria-label={`Preview ${short.title}`}
+                            >
+                              <span className="flex h-16 w-16 items-center justify-center rounded-full border border-white/20 bg-slate-950/70 text-white shadow-2xl shadow-black/40 transition-transform duration-200 hover:scale-105">
+                                <Play className="ml-1 h-7 w-7" />
+                              </span>
+                            </button>
+                          )}
+                        </div>
+                        <CardContent className="p-4">
+                          <div className="mb-3">
+                            <h4 className="truncate font-semibold text-white">{short.title}</h4>
+                            <div className="mt-2 flex flex-wrap gap-2">
+                              <span className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs ${shortStatus.bgColor} ${shortStatus.color}`}>
+                                <ShortStatusIcon className="h-3.5 w-3.5" />
+                                {shortStatus.label}
+                              </span>
+                              <span className="rounded-full bg-slate-800 px-2.5 py-1 text-xs text-slate-300">
+                                Clip {short.order + 1}
+                              </span>
+                              {formatDuration(short.total_duration_ms) && (
+                                <span className="rounded-full bg-slate-800 px-2.5 py-1 text-xs text-slate-300">
+                                  {formatDuration(short.total_duration_ms)}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+
+                          {short.error && (
+                            <div className="mt-3 rounded-lg border border-red-500/20 bg-red-500/10 p-3 text-sm text-red-300">
+                              {short.error}
+                            </div>
+                          )}
+                        </CardContent>
+                      </Card>
+                    );
+                  })}
+                </div>
+              </CardContent>
+            </Card>
+          )}
         </div>
 
         {/* Sidebar */}
@@ -302,7 +465,15 @@ export default function ProjectDetailPage() {
           {/* Configuration */}
           <Card>
             <CardContent className="p-6">
-              <h3 className="text-lg font-semibold text-white mb-4">Configuration</h3>
+              <div className="mb-4 flex items-center gap-3">
+                <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-violet-500/15 text-violet-300">
+                  <Tag className="h-5 w-5" />
+                </div>
+                <div>
+                  <h3 className="text-lg font-semibold text-white">Configuration</h3>
+                  <p className="text-sm text-slate-400">Project settings and attached assets.</p>
+                </div>
+              </div>
               
               <div className="space-y-4">
                 {/* Subtitles */}
@@ -353,24 +524,37 @@ export default function ProjectDetailPage() {
                     )}
                   </div>
                 </div>
-                
-                {/* Shorts */}
-                <div className="flex items-center gap-3">
-                  <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${
-                    project.config.generate_shorts ? 'bg-cyan-500/20' : 'bg-slate-800'
-                  }`}>
-                    <Scissors className={`w-5 h-5 ${project.config.generate_shorts ? 'text-cyan-400' : 'text-slate-500'}`} />
-                  </div>
-                  <div>
-                    <p className="text-sm text-slate-400">Shorts</p>
-                    <p className="font-medium text-white">
-                      {project.config.generate_shorts 
-                        ? `${project.config.shorts_count} clips`
-                        : 'Disabled'
-                      }
-                    </p>
+
+                <div className="rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
+                  <p className="mb-3 text-sm text-slate-400">Tags</p>
+                  <div className="flex flex-wrap gap-2">
+                    <span className="rounded-full bg-violet-500/15 px-3 py-1.5 text-xs text-violet-200">
+                      {project.config.subtitle_style}
+                    </span>
+                    <span className={`rounded-full px-3 py-1.5 text-xs ${project.config.add_broll ? 'bg-emerald-500/15 text-emerald-200' : 'bg-slate-800 text-slate-400'}`}>
+                      {project.config.add_broll ? 'B-Roll enabled' : 'B-Roll disabled'}
+                    </span>
+                    <span className={`rounded-full px-3 py-1.5 text-xs ${project.config.broll_sfx ? 'bg-fuchsia-500/15 text-fuchsia-200' : 'bg-slate-800 text-slate-400'}`}>
+                      {project.config.broll_sfx ? 'SFX on' : 'SFX off'}
+                    </span>
+                    <span className={`rounded-full px-3 py-1.5 text-xs ${musicTrack ? 'bg-purple-500/15 text-purple-200' : 'bg-slate-800 text-slate-400'}`}>
+                      {musicTrack ? 'Music attached' : 'No music'}
+                    </span>
+                    <span className={`rounded-full px-3 py-1.5 text-xs ${project.config.generate_shorts ? 'bg-cyan-500/15 text-cyan-200' : 'bg-slate-800 text-slate-400'}`}>
+                      {project.config.generate_shorts ? `${project.config.shorts_count} shorts` : 'Shorts disabled'}
+                    </span>
                   </div>
                 </div>
+
+                {musicTrack && (
+                  <div className="rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
+                    <div className="mb-3 flex items-center gap-2 text-slate-400">
+                      <AudioLines className="h-4 w-4" />
+                      <p className="text-sm">Music Preview</p>
+                    </div>
+                    <audio controls preload="metadata" src={musicTrack.audio_url} className="w-full" />
+                  </div>
+                )}
               </div>
             </CardContent>
           </Card>
@@ -385,7 +569,7 @@ export default function ProjectDetailPage() {
                   <div className="w-2 h-2 rounded-full bg-slate-500" />
                   <span className="text-slate-400">Created</span>
                   <span className="text-slate-500 ml-auto">
-                    {new Date(project.created_at).toLocaleString()}
+                    {formatDateTime(project.created_at)}
                   </span>
                 </div>
                 {project.updated_at !== project.created_at && (
@@ -399,7 +583,7 @@ export default function ProjectDetailPage() {
                        project.status === 'failed' ? 'Failed' : 'Updated'}
                     </span>
                     <span className="text-slate-500 ml-auto">
-                      {new Date(project.updated_at).toLocaleString()}
+                      {formatDateTime(project.updated_at)}
                     </span>
                   </div>
                 )}

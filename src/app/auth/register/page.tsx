@@ -10,6 +10,29 @@ import { Card, CardContent } from '@/components/ui/Card';
 import { authApi } from '@/lib/api';
 import { useAuthStore } from '@/lib/store';
 
+function getAuthErrorMessage(error: unknown) {
+  if (
+    error &&
+    typeof error === 'object' &&
+    'response' in error &&
+    error.response &&
+    typeof error.response === 'object' &&
+    'data' in error.response
+  ) {
+    const data = error.response.data;
+    if (data && typeof data === 'object' && 'detail' in data) {
+      const detail = data.detail;
+      return typeof detail === 'string' ? detail : JSON.stringify(detail);
+    }
+  }
+
+  if (error && typeof error === 'object' && 'message' in error && typeof error.message === 'string') {
+    return error.message;
+  }
+
+  return 'Registration failed';
+}
+
 export default function RegisterPage() {
   const router = useRouter();
   const { setAuth } = useAuthStore();
@@ -37,13 +60,11 @@ export default function RegisterPage() {
 
     try {
       await authApi.signup(email, password);
-      const { access_token } = await authApi.login(email, password);
-      const user = await authApi.me();
-      setAuth(access_token, user);
+      const { user, token } = await authApi.login(email, password);
+      setAuth(token.access_token, user);
       router.push('/dashboard');
-    } catch (err: any) {
-      const errorMessage = err?.response?.data?.detail || err?.message || 'Registration failed';
-      setError(typeof errorMessage === 'string' ? errorMessage : JSON.stringify(errorMessage));
+    } catch (error) {
+      setError(getAuthErrorMessage(error));
     } finally {
       setLoading(false);
     }
