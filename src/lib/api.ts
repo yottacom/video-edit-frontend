@@ -1,6 +1,7 @@
 // API Client for Video Editor Backend
 import axios, { InternalAxiosRequestConfig } from 'axios';
 import { useDebugStore } from './debug-store';
+import { MultipartListPart, MultipartStartResponse, PartUrlResponse, UploadItem } from '@/types';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'https://video-edit.yt1.co';
 
@@ -301,6 +302,85 @@ export const projectsApi = {
 export const subtitleStylesApi = {
   list: async () => {
     const res = await api.get('/api/editor/subtitle-styles');
+    return res.data;
+  },
+};
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// GENERIC UPLOADS API
+// ═══════════════════════════════════════════════════════════════════════════════
+
+export const uploadsApi = {
+  directUpload: async (file: File, onProgress?: (progress: number) => void): Promise<UploadItem> => {
+    const formData = new FormData();
+    formData.append('file', file);
+
+    const res = await api.post('/api/upload-direct', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      onUploadProgress: (e) => {
+        if (onProgress && e.total) {
+          onProgress(Math.round((e.loaded / e.total) * 100));
+        }
+      },
+    });
+
+    return res.data;
+  },
+
+  startMultipart: async (
+    filename: string,
+    contentType?: string,
+    sizeBytes?: number
+  ): Promise<MultipartStartResponse> => {
+    const res = await api.post('/api/multipart/start', {
+      filename,
+      content_type: contentType || 'application/octet-stream',
+      size_bytes: sizeBytes,
+    });
+    return res.data;
+  },
+
+  getMultipartPartUrl: async (
+    key: string,
+    uploadId: string,
+    partNumber: number,
+    contentType?: string
+  ): Promise<PartUrlResponse> => {
+    const res = await api.post('/api/multipart/part-url', {
+      key,
+      upload_id: uploadId,
+      part_number: partNumber,
+      content_type: contentType,
+    });
+    return res.data;
+  },
+
+  listMultipartParts: async (key: string, uploadId: string): Promise<{ parts?: MultipartListPart[] }> => {
+    const res = await api.post('/api/multipart/list-parts', {
+      key,
+      upload_id: uploadId,
+    });
+    return res.data;
+  },
+
+  completeMultipart: async (
+    key: string,
+    uploadId: string,
+    parts: MultipartListPart[]
+  ): Promise<UploadItem> => {
+    const res = await api.post('/api/multipart/complete', {
+      key,
+      upload_id: uploadId,
+      parts,
+    });
+    return res.data;
+  },
+
+  abortMultipart: async (key: string, uploadId: string) => {
+    const res = await api.post('/api/multipart/abort', {
+      key,
+      upload_id: uploadId,
+    });
     return res.data;
   },
 };

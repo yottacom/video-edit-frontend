@@ -1,13 +1,14 @@
 'use client';
 
-import { useEffect, useState, useRef } from 'react';
+import { useCallback, useEffect, useEffectEvent, useRef, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { 
-  ArrowLeft, Play, Pause, Download, ExternalLink, 
+  ArrowLeft, Download, ExternalLink, 
   Loader2, CheckCircle, XCircle, Clock, Sparkles,
   Video, Music, Type, Scissors, RefreshCw
 } from 'lucide-react';
 import { DashboardLayout } from '@/components/layout/DashboardLayout';
+import { InlineVideoPlayer } from '@/components/media/InlineVideoPlayer';
 import { Card, CardContent } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { projectsApi, sourceVideosApi, musicTracksApi } from '@/lib/api';
@@ -35,9 +36,9 @@ export default function ProjectDetailPage() {
   const [loading, setLoading] = useState(true);
   const [reprocessing, setReprocessing] = useState(false);
   
-  const pollRef = useRef<NodeJS.Timeout | null>(null);
+  const pollTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const loadProject = async () => {
+  const loadProject = useCallback(async () => {
     try {
       const data = await projectsApi.get(projectId);
       setProject(data);
@@ -66,50 +67,65 @@ export default function ProjectDetailPage() {
     } catch (error) {
       console.error('Failed to load project:', error);
       router.push('/dashboard/projects');
+      return null;
     } finally {
       setLoading(false);
     }
-  };
+  }, [projectId, router]);
+
+  const pollProjectStatus = useEffectEvent(async () => {
+    try {
+      const data = await projectsApi.poll(projectId);
+      setProject((prev) => (prev ? { ...prev, ...data } : null));
+
+      if (['pending', 'transcribing', 'planning', 'generating', 'rendering'].includes(data.status)) {
+        pollTimeoutRef.current = setTimeout(() => {
+          void pollProjectStatus();
+        }, 3000);
+      }
+    } catch (error) {
+      console.error('Poll failed:', error);
+    }
+  });
 
   useEffect(() => {
-    loadProject();
+    void loadProject();
     
     return () => {
-      if (pollRef.current) {
-        clearInterval(pollRef.current);
+      if (pollTimeoutRef.current) {
+        clearTimeout(pollTimeoutRef.current);
+        pollTimeoutRef.current = null;
       }
     };
-  }, [projectId]);
+  }, [loadProject]);
 
   // Poll for updates while processing
+  const isProjectProcessing = project
+    ? ['pending', 'transcribing', 'planning', 'generating', 'rendering'].includes(project.status)
+    : false;
+
   useEffect(() => {
     if (!project) return;
-    
-    const isProcessing = ['pending', 'transcribing', 'planning', 'generating', 'rendering'].includes(project.status);
-    
-    if (isProcessing) {
-      pollRef.current = setInterval(async () => {
-        try {
-          const data = await projectsApi.poll(projectId);
-          setProject(prev => prev ? { ...prev, ...data } : null);
-          
-          if (!['pending', 'transcribing', 'planning', 'generating', 'rendering'].includes(data.status)) {
-            if (pollRef.current) {
-              clearInterval(pollRef.current);
-            }
-          }
-        } catch (e) {
-          console.error('Poll failed:', e);
-        }
-      }, 3000);
+
+    if (!isProjectProcessing) {
+      if (pollTimeoutRef.current) {
+        clearTimeout(pollTimeoutRef.current);
+        pollTimeoutRef.current = null;
+      }
+      return;
     }
-    
+
+    pollTimeoutRef.current = setTimeout(() => {
+      void pollProjectStatus();
+    }, 3000);
+
     return () => {
-      if (pollRef.current) {
-        clearInterval(pollRef.current);
+      if (pollTimeoutRef.current) {
+        clearTimeout(pollTimeoutRef.current);
+        pollTimeoutRef.current = null;
       }
     };
-  }, [project?.status, projectId]);
+  }, [isProjectProcessing, project]);
 
   const handleReprocess = async () => {
     setReprocessing(true);
@@ -136,6 +152,13 @@ export default function ProjectDetailPage() {
   const status = statusConfig[project.status] || statusConfig.draft;
   const StatusIcon = status.icon;
   const isProcessing = ['pending', 'transcribing', 'planning', 'generating', 'rendering'].includes(project.status);
+  const formatDuration = (ms: number | null) => {
+    if (!ms) return null;
+
+    const minutes = Math.floor(ms / 60000);
+    const seconds = Math.floor((ms % 60000) / 1000);
+    return `${minutes}:${seconds.toString().padStart(2, '0')}`;
+  };
 
   return (
     <DashboardLayout>
@@ -229,13 +252,18 @@ export default function ProjectDetailPage() {
             <Card>
               <CardContent className="p-6">
                 <h3 className="text-lg font-semibold text-white mb-4">Output Video</h3>
-                <div className="aspect-video bg-slate-800 rounded-lg overflow-hidden">
-                  <video 
-                    src={project.output_url} 
-                    controls 
-                    className="w-full h-full"
-                    poster={sourceVideo?.thumbnail_url || undefined}
-                  />
+                <InlineVideoPlayer
+                  key={project.output_url}
+                  videoUrl={project.output_url}
+                  thumbnailUrl={sourceVideo?.thumbnail_url}
+                  title={project.title}
+                />
+                <div className="mt-4 flex flex-wrap items-center gap-x-4 gap-y-2 text-sm text-slate-400">
+                  <span>{status.label}</span>
+                  <span>Created {new Date(project.created_at).toLocaleDateString()}</span>
+                  {typeof project.progress === 'number' && project.progress > 0 && (
+                    <span>{project.progress}% complete</span>
+                  )}
                 </div>
               </CardContent>
             </Card>
@@ -246,33 +274,22 @@ export default function ProjectDetailPage() {
             <Card>
               <CardContent className="p-6">
                 <h3 className="text-lg font-semibold text-white mb-4">Source Video</h3>
-                <div className="flex gap-4">
-                  <div className="w-40 aspect-video bg-slate-800 rounded-lg overflow-hidden flex-shrink-0">
-                    {sourceVideo.thumbnail_url ? (
-                      <img 
-                        src={sourceVideo.thumbnail_url} 
-                        alt={sourceVideo.title}
-                        className="w-full h-full object-cover"
-                      />
-                    ) : (
-                      <div className="w-full h-full flex items-center justify-center">
-                        <Video className="w-8 h-8 text-slate-600" />
-                      </div>
+                <InlineVideoPlayer
+                  key={sourceVideo.id}
+                  videoUrl={sourceVideo.video_url}
+                  thumbnailUrl={sourceVideo.thumbnail_url}
+                  title={sourceVideo.title}
+                />
+                <div className="mt-4">
+                  <p className="font-medium text-white">{sourceVideo.title}</p>
+                  <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-2 text-sm text-slate-500">
+                    {formatDuration(sourceVideo.duration_ms) && (
+                      <span>{formatDuration(sourceVideo.duration_ms)}</span>
                     )}
-                  </div>
-                  <div>
-                    <p className="font-medium text-white">{sourceVideo.title}</p>
-                    <div className="flex items-center gap-4 mt-2 text-sm text-slate-500">
-                      {sourceVideo.duration_ms && (
-                        <span>
-                          {Math.floor(sourceVideo.duration_ms / 60000)}:
-                          {String(Math.floor((sourceVideo.duration_ms % 60000) / 1000)).padStart(2, '0')}
-                        </span>
-                      )}
-                      {sourceVideo.width && sourceVideo.height && (
-                        <span>{sourceVideo.width}×{sourceVideo.height}</span>
-                      )}
-                    </div>
+                    {sourceVideo.width && sourceVideo.height && (
+                      <span>{sourceVideo.width}x{sourceVideo.height}</span>
+                    )}
+                    <span>{new Date(sourceVideo.created_at).toLocaleDateString()}</span>
                   </div>
                 </div>
               </CardContent>

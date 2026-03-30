@@ -7,6 +7,7 @@ import {
   Sparkles, Check, Loader2, Play 
 } from 'lucide-react';
 import { DashboardLayout } from '@/components/layout/DashboardLayout';
+import { VideoThumbnail } from '@/components/media/VideoThumbnail';
 import { Card, CardContent } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
@@ -161,11 +162,13 @@ export default function NewProjectPage() {
                     >
                       <CardContent className="p-4">
                         <div className="aspect-video bg-slate-800 rounded-lg mb-3 flex items-center justify-center overflow-hidden">
-                          {video.thumbnail_url ? (
-                            <img src={video.thumbnail_url} alt={video.title} className="w-full h-full object-cover" />
-                          ) : (
-                            <Play className="w-10 h-10 text-slate-600" />
-                          )}
+                          <VideoThumbnail
+                            videoUrl={video.video_url}
+                            thumbnailUrl={video.thumbnail_url}
+                            title={video.title}
+                            className="w-full h-full object-cover"
+                            fallbackIconClassName="w-10 h-10 text-slate-600"
+                          />
                         </div>
                         <p className="font-medium text-white truncate">{video.title}</p>
                         {video.duration_ms && (

@@ -81,3 +81,30 @@ export interface PaginatedResponse<T> {
   page: number;
   page_size: number;
 }
+
+export interface UploadItem {
+  id: string;
+  title: string;
+  content_type: string;
+  size_bytes: number | null;
+  status: 'uploading' | 'completed' | 'failed' | 'aborted';
+  progress: number;
+  s3_key: string | null;
+  url: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface MultipartStartResponse {
+  key: string;
+  upload_id: string;
+}
+
+export interface PartUrlResponse {
+  url: string;
+}
+
+export interface MultipartListPart {
+  PartNumber: number;
+  ETag: string;
+}
