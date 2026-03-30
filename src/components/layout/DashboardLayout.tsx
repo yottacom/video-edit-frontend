@@ -31,19 +31,31 @@ const navItems = [
 export function DashboardLayout({ children }: DashboardLayoutProps) {
   const pathname = usePathname();
   const router = useRouter();
-  const { user, isAuthenticated, logout } = useAuthStore();
+  const { user, isAuthenticated, hasHydrated, logout } = useAuthStore();
   const { sidebarOpen, toggleSidebar } = useUIStore();
 
   useEffect(() => {
-    if (!isAuthenticated) {
-      router.push('/auth/login');
+    if (!hasHydrated) {
+      return;
     }
-  }, [isAuthenticated, router]);
+
+    if (!isAuthenticated) {
+      router.replace('/auth/login');
+    }
+  }, [hasHydrated, isAuthenticated, router]);
 
   const handleLogout = () => {
     logout();
     router.push('/auth/login');
   };
+
+  if (!hasHydrated) {
+    return (
+      <div className="min-h-screen bg-slate-950 flex items-center justify-center">
+        <Sparkles className="w-8 h-8 text-violet-500 animate-pulse" />
+      </div>
+    );
+  }
 
   if (!isAuthenticated) {
     return null;

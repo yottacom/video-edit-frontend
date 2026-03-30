@@ -2,7 +2,8 @@
 
 import { useCallback, useEffect, useEffectEvent, useRef, useState } from 'react';
 import Link from 'next/link';
-import { Plus, Play, Clock, CheckCircle, XCircle, Loader2, Trash2, X, RefreshCw } from 'lucide-react';
+import { Plus, Play, Clock, CheckCircle, XCircle, Loader2, Trash2, RefreshCw } from 'lucide-react';
+import { InlineVideoPlayer } from '@/components/media/InlineVideoPlayer';
 import { DashboardLayout } from '@/components/layout/DashboardLayout';
 import { Card, CardContent } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
@@ -30,7 +31,6 @@ export default function ProjectsPage() {
   const [projects, setProjects] = useState<EditProject[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [previewProject, setPreviewProject] = useState<EditProject | null>(null);
   const pollTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const didInitialLoadRef = useRef(false);
 
@@ -42,12 +42,6 @@ export default function ProjectsPage() {
     try {
       const data = await projectsApi.list(1, 50);
       setProjects(data.items);
-      setPreviewProject((currentPreview) => {
-        if (!currentPreview) return currentPreview;
-
-        const refreshedPreview = data.items.find((project: EditProject) => project.id === currentPreview.id);
-        return refreshedPreview ?? currentPreview;
-      });
       return data.items as EditProject[];
     } catch (error) {
       console.error('Failed to load projects:', error);
@@ -105,13 +99,6 @@ export default function ProjectsPage() {
           return update ? { ...project, ...update } : project;
         })
       );
-
-      setPreviewProject((currentPreview) => {
-        if (!currentPreview) return currentPreview;
-
-        const update = updates.get(currentPreview.id);
-        return update ? { ...currentPreview, ...update } : currentPreview;
-      });
     }
 
     return stillProcessing;
@@ -123,25 +110,6 @@ export default function ProjectsPage() {
     didInitialLoadRef.current = true;
     void loadProjects('initial');
   }, [loadProjects]);
-
-  useEffect(() => {
-    if (!previewProject) return;
-
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        setPreviewProject(null);
-      }
-    };
-
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
-    window.addEventListener('keydown', handleKeyDown);
-
-    return () => {
-      document.body.style.overflow = previousOverflow;
-      window.removeEventListener('keydown', handleKeyDown);
-    };
-  }, [previewProject]);
 
   useEffect(() => {
     if (!hasProcessingProjects) {
@@ -180,6 +148,7 @@ export default function ProjectsPage() {
 
   const handleDelete = async (id: string) => {
     if (!confirm('Are you sure you want to delete this project?')) return;
+
     try {
       await projectsApi.delete(id);
       setProjects((currentProjects) => currentProjects.filter((project) => project.id !== id));
@@ -190,55 +159,9 @@ export default function ProjectsPage() {
 
   return (
     <DashboardLayout>
-      {previewProject && previewProject.output_url && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/85 backdrop-blur-md"
-          onClick={() => setPreviewProject(null)}
-        >
-          <div
-            className="w-full max-w-5xl overflow-hidden rounded-3xl border border-slate-800 bg-slate-900 shadow-2xl"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <div className="flex items-start justify-between gap-6 border-b border-slate-800 px-6 py-5">
-              <div className="min-w-0">
-                <p className="text-sm uppercase tracking-[0.3em] text-violet-300/80">Project Preview</p>
-                <h2 className="mt-1 truncate text-xl font-semibold text-white">{previewProject.title}</h2>
-                <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-2 text-sm text-slate-400">
-                  <span>{(statusConfig[previewProject.status] || statusConfig.draft).label}</span>
-                  <span>{new Date(previewProject.created_at).toLocaleDateString()}</span>
-                  {typeof previewProject.progress === 'number' && previewProject.progress > 0 && (
-                    <span>{previewProject.progress}% complete</span>
-                  )}
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => setPreviewProject(null)}
-                className="rounded-full border border-slate-700 p-2 text-slate-400 transition-colors hover:border-slate-500 hover:text-white"
-                aria-label="Close preview"
-              >
-                <X className="h-5 w-5" />
-              </button>
-            </div>
-
-            <div className="bg-black">
-              <video
-                key={previewProject.id}
-                src={previewProject.output_url}
-                controls
-                autoPlay
-                playsInline
-                className="max-h-[72vh] w-full bg-black"
-              />
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Header */}
-      <div className="flex items-center justify-between mb-8">
+      <div className="mb-8 flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold text-white mb-2">Projects</h1>
+          <h1 className="mb-2 text-3xl font-bold text-white">Projects</h1>
           <p className="text-slate-400">Manage your video editing projects</p>
         </div>
         <div className="flex items-center gap-3">
@@ -250,123 +173,152 @@ export default function ProjectsPage() {
             loading={refreshing}
             disabled={loading}
           >
-            {!refreshing && <RefreshCw className="w-5 h-5" />}
+            {!refreshing && <RefreshCw className="h-5 w-5" />}
             Refresh
           </Button>
           <Link href="/dashboard/projects/new">
             <Button>
-              <Plus className="w-5 h-5" />
+              <Plus className="h-5 w-5" />
               New Project
             </Button>
           </Link>
         </div>
       </div>
 
-      {/* Projects Grid */}
       {loading ? (
         <div className="flex items-center justify-center py-20">
-          <Loader2 className="w-8 h-8 text-violet-500 animate-spin" />
+          <Loader2 className="h-8 w-8 animate-spin text-violet-500" />
         </div>
       ) : projects.length === 0 ? (
         <Card>
           <CardContent className="flex flex-col items-center justify-center py-20">
-            <div className="w-20 h-20 rounded-full bg-slate-800 flex items-center justify-center mb-4">
-              <Play className="w-10 h-10 text-slate-600" />
+            <div className="mb-4 flex h-20 w-20 items-center justify-center rounded-full bg-slate-800">
+              <Play className="h-10 w-10 text-slate-600" />
             </div>
-            <h3 className="text-xl font-semibold text-white mb-2">No projects yet</h3>
-            <p className="text-slate-400 mb-6">Create your first video editing project</p>
+            <h3 className="mb-2 text-xl font-semibold text-white">No projects yet</h3>
+            <p className="mb-6 text-slate-400">Create your first video editing project</p>
             <Link href="/dashboard/projects/new">
               <Button>
-                <Plus className="w-5 h-5" />
+                <Plus className="h-5 w-5" />
                 Create Project
               </Button>
             </Link>
           </CardContent>
         </Card>
       ) : (
-        <div className="grid gap-4">
+        <div className="grid gap-6 md:grid-cols-2 xl:grid-cols-3">
           {projects.map((project) => {
             const status = statusConfig[project.status] || statusConfig.draft;
             const StatusIcon = status.icon;
             const isProcessing = isProcessingStatus(project.status);
-            
+
             return (
-              <Card key={project.id} hover>
-                <CardContent className="p-6">
-                  <div className="flex items-center gap-6">
-                    {/* Status Icon */}
-                    <div className={`w-12 h-12 rounded-xl bg-slate-800 flex items-center justify-center ${status.color}`}>
-                      <StatusIcon className={`w-6 h-6 ${isProcessing ? 'animate-spin' : ''}`} />
-                    </div>
-                    
-                    {/* Info */}
-                    <div className="flex-1 min-w-0">
-                      <h3 className="text-lg font-semibold text-white truncate">{project.title}</h3>
-                      <div className="flex items-center gap-4 mt-1">
-                        <span className={`text-sm ${status.color}`}>{status.label}</span>
-                        {isProcessing && (
-                          <span className="text-sm text-slate-500">{project.progress}%</span>
-                        )}
-                        <span className="text-sm text-slate-500">
-                          {new Date(project.created_at).toLocaleDateString()}
-                        </span>
-                      </div>
-                      
-                      {/* Progress Bar */}
-                      {isProcessing && (
-                        <div className="mt-3 h-1.5 bg-slate-800 rounded-full overflow-hidden">
-                          <div 
-                            className="h-full bg-gradient-to-r from-violet-600 to-indigo-600 transition-all duration-500"
-                            style={{ width: `${project.progress}%` }}
-                          />
+              <Card key={project.id} hover className="flex h-full flex-col overflow-hidden">
+                <div className="border-b border-slate-700/50 bg-slate-900/70">
+                  {project.output_url ? (
+                    <InlineVideoPlayer
+                      key={project.output_url}
+                      videoUrl={project.output_url}
+                      title={project.title}
+                      className="rounded-none"
+                    />
+                  ) : (
+                    <div className="relative aspect-video overflow-hidden bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900">
+                      <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(99,102,241,0.22),transparent_55%)]" />
+                      <div className="absolute inset-0 flex items-center justify-center">
+                        <div className={`flex h-16 w-16 items-center justify-center rounded-full border border-white/10 bg-slate-950/70 ${status.color}`}>
+                          <StatusIcon className={`h-7 w-7 ${isProcessing ? 'animate-spin' : ''}`} />
                         </div>
-                      )}
-                      
-                      {/* Config Tags */}
-                      <div className="flex gap-2 mt-3">
-                        <span className="px-2 py-1 text-xs rounded bg-slate-800 text-slate-400">
-                          {project.config.subtitle_style}
-                        </span>
-                        {project.config.add_broll && (
-                          <span className="px-2 py-1 text-xs rounded bg-violet-500/20 text-violet-400">
-                            B-Roll
-                          </span>
-                        )}
-                        {project.config.generate_shorts && (
-                          <span className="px-2 py-1 text-xs rounded bg-cyan-500/20 text-cyan-400">
-                            Shorts: {project.config.shorts_count}
-                          </span>
-                        )}
+                      </div>
+                      <div className="absolute inset-x-0 bottom-0 p-4">
+                        <p className="text-sm font-medium text-white/95">{status.label}</p>
+                        <p className="mt-1 text-xs uppercase tracking-[0.25em] text-white/50">
+                          {isProcessing ? 'Project is processing' : 'Preview unavailable'}
+                        </p>
                       </div>
                     </div>
-                    
-                    {/* Actions */}
-                    <div className="flex items-center gap-2">
-                      {project.status === 'completed' && project.output_url && (
-                        <Button
-                          variant="secondary"
-                          size="sm"
-                          onClick={() => setPreviewProject(project)}
-                        >
-                          <Play className="w-4 h-4" />
-                          View
-                        </Button>
-                      )}
-                      <Link href={`/dashboard/projects/${project.id}`}>
-                        <Button variant="secondary" size="sm">Details</Button>
-                      </Link>
-                      <button 
-                        onClick={() => handleDelete(project.id)}
-                        className="p-2 text-slate-500 hover:text-red-400 transition-colors"
-                      >
-                        <Trash2 className="w-5 h-5" />
-                      </button>
+                  )}
+                </div>
+
+                <CardContent className="flex flex-1 flex-col p-5">
+                  <div className="mb-4 flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <h3 className="truncate text-lg font-semibold text-white">{project.title}</h3>
+                      <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-2 text-sm">
+                        <span className={`inline-flex items-center gap-2 rounded-full bg-slate-900 px-2.5 py-1 ${status.color}`}>
+                          <StatusIcon className={`h-4 w-4 ${isProcessing ? 'animate-spin' : ''}`} />
+                          {status.label}
+                        </span>
+                        <span className="text-slate-500">{new Date(project.created_at).toLocaleDateString()}</span>
+                      </div>
                     </div>
+                    <button
+                      onClick={() => handleDelete(project.id)}
+                      className="rounded-lg p-2 text-slate-500 transition-colors hover:bg-slate-900 hover:text-red-400"
+                      aria-label={`Delete ${project.title}`}
+                    >
+                      <Trash2 className="h-5 w-5" />
+                    </button>
                   </div>
-                  
-                  {/* Error Message */}
+
+                  {isProcessing && (
+                    <div className="mb-4">
+                      <div className="flex items-center justify-between text-sm text-slate-400">
+                        <span>Progress</span>
+                        <span>{project.progress}%</span>
+                      </div>
+                      <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-slate-900">
+                        <div
+                          className="h-full bg-gradient-to-r from-violet-600 to-indigo-600 transition-all duration-500"
+                          style={{ width: `${project.progress}%` }}
+                        />
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="mb-5 flex flex-wrap gap-2">
+                    <span className="rounded-full bg-slate-900 px-2.5 py-1 text-xs text-slate-300">
+                      {project.config.subtitle_style}
+                    </span>
+                    {project.config.add_broll && (
+                      <span className="rounded-full bg-violet-500/15 px-2.5 py-1 text-xs text-violet-300">
+                        B-Roll
+                      </span>
+                    )}
+                    {project.config.broll_sfx && (
+                      <span className="rounded-full bg-fuchsia-500/15 px-2.5 py-1 text-xs text-fuchsia-300">
+                        SFX
+                      </span>
+                    )}
+                    {project.config.music_track_id && (
+                      <span className="rounded-full bg-emerald-500/15 px-2.5 py-1 text-xs text-emerald-300">
+                        Music
+                      </span>
+                    )}
+                    {project.config.generate_shorts && (
+                      <span className="rounded-full bg-cyan-500/15 px-2.5 py-1 text-xs text-cyan-300">
+                        Shorts: {project.config.shorts_count}
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="mt-auto flex items-center gap-2">
+                    <Link href={`/dashboard/projects/${project.id}`} className="flex-1">
+                      <Button variant="secondary" className="w-full" size="sm">
+                        Details
+                      </Button>
+                    </Link>
+                    {project.output_url && (
+                      <a href={project.output_url} download className="flex-1">
+                        <Button variant="outline" className="w-full" size="sm">
+                          Download
+                        </Button>
+                      </a>
+                    )}
+                  </div>
+
                   {project.status === 'failed' && project.error_message && (
-                    <div className="mt-4 p-3 rounded-lg bg-red-500/10 border border-red-500/20 text-red-400 text-sm">
+                    <div className="mt-4 rounded-lg border border-red-500/20 bg-red-500/10 p-3 text-sm text-red-300">
                       {project.error_message}
                     </div>
                   )}
