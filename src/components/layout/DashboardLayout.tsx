@@ -17,6 +17,7 @@ import {
 import { Button } from '@/components/ui/Button';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { useAuthStore, useUIStore } from '@/lib/store';
+import { Asset } from 'next/font/google';
 
 interface DashboardLayoutProps {
   children: ReactNode;
@@ -27,6 +28,8 @@ const navItems = [
   { href: '/dashboard/videos', label: 'Source Videos', icon: Video },
   { href: '/dashboard/music', label: 'Music Library', icon: Music },
   { href: '/dashboard/projects', label: 'Projects', icon: FolderOpen },
+  { href: '/dashboard/custom_video', label: 'Custom Videos', icon: Video },
+  { href: '/dashboard/assets', label: 'Assets', icon: Video },
   { href: '/dashboard/settings', label: 'Settings', icon: Settings },
 ];
 
