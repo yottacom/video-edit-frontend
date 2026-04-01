@@ -1010,6 +1010,7 @@ export default function CreateVideoPage() {
   const sceneRowHeight = 'h-24';
   const timelineLabelWidthClass = 'w-40';
   const MIN_DURATION = 1.0; 
+  const PRIMARY_MIN_DURATION = 0.01;
   const DEFAULT_IMAGE_DURATION = 2.0;
   const isInitialPageLoading = hydratingDraft || loadingLibraryAssets || (!!routeId && !customVideoId);
   const isRenderInProgress = customVideoStatus === 'finalizing' || customVideoStatus === 'rendering';
@@ -1031,6 +1032,111 @@ export default function CreateVideoPage() {
     });
   };
 
+  const distributePrimaryAssetsEvenly = useCallback((primaryArray: TimelineAsset[], totalDuration: number) => {
+    if (primaryArray.length === 0) {
+      return [];
+    }
+
+    const safeTotalDuration = Math.max(PRIMARY_MIN_DURATION, totalDuration);
+    const equalDuration = safeTotalDuration / primaryArray.length;
+    let currentStart = 0;
+
+    return primaryArray.map((asset, index) => {
+      const duration =
+        index === primaryArray.length - 1
+          ? Math.max(0, safeTotalDuration - currentStart)
+          : equalDuration;
+      const updated = { ...asset, start: currentStart, end: currentStart + duration, duration };
+      currentStart = updated.end;
+      return updated;
+    });
+  }, []);
+
+  const redistributePrimaryTail = useCallback((primaryArray: TimelineAsset[], totalDuration: number) => {
+    if (primaryArray.length === 0) {
+      return [];
+    }
+
+    const safeTotalDuration = Math.max(0, totalDuration);
+    const minimumTotalDuration = PRIMARY_MIN_DURATION * primaryArray.length;
+
+    if (safeTotalDuration <= minimumTotalDuration) {
+      return distributePrimaryAssetsEvenly(primaryArray, safeTotalDuration);
+    }
+
+    const weights = primaryArray.map((asset) => Math.max(asset.duration, PRIMARY_MIN_DURATION));
+    let remainingWeight = weights.reduce((sum, weight) => sum + weight, 0);
+    let remainingDuration = safeTotalDuration;
+    let remainingExtraDuration = safeTotalDuration - minimumTotalDuration;
+    let currentStart = 0;
+
+    return primaryArray.map((asset, index) => {
+      let duration: number;
+
+      if (index === primaryArray.length - 1) {
+        duration = Math.max(0, remainingDuration);
+      } else {
+        const extraShare =
+          remainingWeight > 0
+            ? (remainingExtraDuration * weights[index]) / remainingWeight
+            : remainingExtraDuration / (primaryArray.length - index);
+        duration = PRIMARY_MIN_DURATION + extraShare;
+        remainingExtraDuration -= extraShare;
+        remainingWeight -= weights[index];
+      }
+
+      const updated = { ...asset, start: currentStart, end: currentStart + duration, duration };
+      currentStart = updated.end;
+      remainingDuration -= duration;
+      return updated;
+    });
+  }, [distributePrimaryAssetsEvenly]);
+
+  const resizePrimaryAssetsWithinDuration = useCallback((
+    primaryArray: TimelineAsset[],
+    assetIndex: number,
+    desiredDuration: number,
+    totalDuration: number
+  ) => {
+    if (primaryArray.length === 0 || !primaryArray[assetIndex]) {
+      return primaryArray;
+    }
+
+    const safeTotalDuration = Math.max(PRIMARY_MIN_DURATION, totalDuration);
+    const beforeAssets = primaryArray.slice(0, assetIndex);
+    const currentAsset = primaryArray[assetIndex];
+    const afterAssets = primaryArray.slice(assetIndex + 1);
+    const lockedDuration = beforeAssets.reduce((sum, asset) => sum + asset.duration, 0);
+    const reservedAfterDuration = afterAssets.length * PRIMARY_MIN_DURATION;
+    const availableForCurrent = Math.max(
+      PRIMARY_MIN_DURATION,
+      safeTotalDuration - lockedDuration - reservedAfterDuration
+    );
+    const nextDuration = Math.min(
+      Math.max(PRIMARY_MIN_DURATION, desiredDuration),
+      availableForCurrent
+    );
+    const remainingAfterDuration = Math.max(0, safeTotalDuration - lockedDuration - nextDuration);
+
+    return recalculatePrimaryTimes([
+      ...beforeAssets,
+      { ...currentAsset, duration: nextDuration },
+      ...redistributePrimaryTail(afterAssets, remainingAfterDuration),
+    ]);
+  }, [redistributePrimaryTail]);
+
+  const getTrackSurfaceWidth = (target: EventTarget | null) => {
+    if (!(target instanceof HTMLElement)) {
+      return 1;
+    }
+
+    const trackSurface =
+      (target.closest('.timeline-track-surface') as HTMLElement | null) ||
+      (target.closest('.timeline-track-container') as HTMLElement | null);
+
+    return Math.max(1, trackSurface?.getBoundingClientRect().width || 1);
+  };
+
   const getSceneDurations = useCallback((scene: Scene) => {
     const narrationDur = scene.narration?.duration || 0;
     const primaryDur = scene.primaryAssets.reduce((sum, asset) => sum + asset.duration, 0);
@@ -1038,7 +1144,9 @@ export default function CreateVideoPage() {
       const trackEnd = track.reduce((maxAssetEnd, asset) => Math.max(maxAssetEnd, asset.end), 0);
       return Math.max(maxTrackEnd, trackEnd);
     }, 0);
-    const displayDuration = Math.max(MIN_DURATION, narrationDur, primaryDur, secondaryDur);
+    const displayDuration = scene.narration
+      ? Math.max(MIN_DURATION, narrationDur)
+      : Math.max(MIN_DURATION, primaryDur, secondaryDur);
     return { narrationDur, primaryDur, secondaryDur, displayDuration };
   }, []);
 
@@ -1168,16 +1276,21 @@ export default function CreateVideoPage() {
           }
         : previousScene?.subtitle || null;
 
+      const normalizedPrimaryAssets =
+        narration && primaryAssets.length > 0 && Math.abs(primaryAssets.reduce((sum, asset) => sum + asset.duration, 0) - narration.duration) > 0.01
+          ? distributePrimaryAssetsEvenly(primaryAssets, narration.duration)
+          : primaryAssets;
+
       return {
         id: previousScene?.id || `scene-${backendScene.id}`,
         backendSceneId: backendScene.id,
-        primaryAssets,
+        primaryAssets: normalizedPrimaryAssets,
         secondaryAssets,
         narration,
         subtitle,
       };
     });
-  }, [createFallbackAsset, libraryAssets]);
+  }, [createFallbackAsset, distributePrimaryAssetsEvenly, libraryAssets]);
 
   const buildScenePayload = useCallback((scene: Scene, index: number) => {
     const { narrationDur, primaryDur } = getSceneDurations(scene);
@@ -2008,8 +2121,25 @@ export default function CreateVideoPage() {
           };
 
           if (rowType === 'narration') {
-            return { ...scene, narration: newTimelineAsset };
+            return {
+              ...scene,
+              narration: newTimelineAsset,
+              primaryAssets:
+                scene.primaryAssets.length > 0
+                  ? distributePrimaryAssetsEvenly(scene.primaryAssets, newTimelineAsset.duration)
+                  : scene.primaryAssets,
+            };
           } else if (rowType === 'primary') {
+            if (scene.narration) {
+              return {
+                ...scene,
+                primaryAssets: distributePrimaryAssetsEvenly(
+                  [...scene.primaryAssets, newTimelineAsset],
+                  scene.narration.duration
+                ),
+              };
+            }
+
             const currentTotal = scene.primaryAssets.reduce((sum, a) => sum + a.duration, 0);
             newTimelineAsset.start = currentTotal;
             newTimelineAsset.end = currentTotal + initialDuration;
@@ -2039,7 +2169,7 @@ export default function CreateVideoPage() {
       queueSceneSave(sceneId);
     }
     closeAssetPicker();
-  }, [closeAssetPicker, currentPickerTarget, queueSceneSave, scenes]);
+  }, [closeAssetPicker, currentPickerTarget, distributePrimaryAssetsEvenly, queueSceneSave, scenes]);
 
   const handleRemoveAsset = useCallback((sceneId: string, rowType: 'primary' | 'secondary' | 'narration' | 'subtitle', timelineAssetId?: string, secondaryOverlapIndex?: number) => {
     const targetScene = scenes.find((scene) => scene.id === sceneId);
@@ -2053,7 +2183,10 @@ export default function CreateVideoPage() {
           else if (rowType === 'subtitle') updatedScene.subtitle = null;
           else if (rowType === 'primary') {
             updatedScene.primaryAssets = updatedScene.primaryAssets.filter((a) => a.id !== timelineAssetId);
-            updatedScene.primaryAssets = recalculatePrimaryTimes(updatedScene.primaryAssets); 
+            updatedScene.primaryAssets =
+              updatedScene.narration && updatedScene.primaryAssets.length > 0
+                ? distributePrimaryAssetsEvenly(updatedScene.primaryAssets, updatedScene.narration.duration)
+                : recalculatePrimaryTimes(updatedScene.primaryAssets);
           } else if (rowType === 'secondary' && secondaryOverlapIndex !== undefined) {
             updatedScene.secondaryAssets[secondaryOverlapIndex] = updatedScene.secondaryAssets[secondaryOverlapIndex].filter((a) => a.id !== timelineAssetId);
           }
@@ -2065,7 +2198,7 @@ export default function CreateVideoPage() {
     if (shouldQueueSave) {
       queueSceneSave(sceneId);
     }
-  }, [queueSceneSave, scenes]);
+  }, [distributePrimaryAssetsEvenly, queueSceneSave, scenes]);
 
   const handleSwapPrimary = useCallback((sceneId: string, index: number, direction: 'left' | 'right') => {
     const targetScene = scenes.find((scene) => scene.id === sceneId);
@@ -2117,7 +2250,7 @@ export default function CreateVideoPage() {
     e.preventDefault(); e.stopPropagation();
     const scene = scenes.find(s => s.id === sceneId);
     if (!scene) return;
-    const trackWidth = (e.currentTarget.closest('.timeline-track-container') as HTMLElement).getBoundingClientRect().width;
+    const trackWidth = getTrackSurfaceWidth(e.currentTarget);
     setDragState({ type: 'primary-resize', sceneId, assetIndex, startX: e.clientX, origDuration: scene.primaryAssets[assetIndex].duration, trackWidth });
   };
 
@@ -2125,7 +2258,7 @@ export default function CreateVideoPage() {
     e.preventDefault(); e.stopPropagation();
     const scene = scenes.find(s => s.id === sceneId);
     if (!scene) return;
-    const trackWidth = (e.currentTarget.closest('.timeline-track-container') as HTMLElement).getBoundingClientRect().width;
+    const trackWidth = getTrackSurfaceWidth(e.currentTarget);
     const track = scene.secondaryAssets[trackIndex];
     const targetAsset = track[assetIndex];
 
@@ -2141,7 +2274,7 @@ export default function CreateVideoPage() {
     e.preventDefault(); e.stopPropagation();
     const scene = scenes.find(s => s.id === sceneId);
     if (!scene) return;
-    const trackWidth = (e.currentTarget.closest('.timeline-track-container') as HTMLElement).getBoundingClientRect().width;
+    const trackWidth = getTrackSurfaceWidth(e.currentTarget);
     const track = scene.secondaryAssets[trackIndex];
     const targetAsset = track[assetIndex];
 
@@ -2169,6 +2302,18 @@ export default function CreateVideoPage() {
 
         if (dragState.type === 'primary-resize') {
           let newDuration = dragState.origDuration + deltaTime;
+          if (scene.narration) {
+            return {
+              ...scene,
+              primaryAssets: resizePrimaryAssetsWithinDuration(
+                scene.primaryAssets,
+                dragState.assetIndex,
+                newDuration,
+                scene.narration.duration
+              ),
+            };
+          }
+
           if (newDuration < MIN_DURATION) newDuration = MIN_DURATION;
           const newPrimary = [...scene.primaryAssets];
           newPrimary[dragState.assetIndex] = { ...newPrimary[dragState.assetIndex], duration: newDuration };
@@ -2229,7 +2374,7 @@ export default function CreateVideoPage() {
     window.addEventListener('mousemove', handleMouseMove);
     window.addEventListener('mouseup', handleMouseUp);
     return () => { document.body.style.cursor = ''; document.body.style.userSelect = ''; window.removeEventListener('mousemove', handleMouseMove); window.removeEventListener('mouseup', handleMouseUp); };
-  }, [dragState, getSceneDurations, queueSceneSave, scenes]); 
+  }, [dragState, getSceneDurations, queueSceneSave, resizePrimaryAssetsWithinDuration, scenes]); 
 
 
   // --- Render Functions ---
@@ -2524,7 +2669,7 @@ export default function CreateVideoPage() {
 
             {scenes.map((scene, sceneIndex) => {
               const { primaryDur, narrationDur, displayDuration } = getSceneDurations(scene);
-              const warningVisible = scene.narration && primaryDur > narrationDur;
+              const warningVisible = !!scene.narration && primaryDur - narrationDur > 0.01;
               const cutoffPercentage = scene.narration
                 ? Math.min(100, Math.max(0, (narrationDur / displayDuration) * 100))
                 : 0;
@@ -2578,7 +2723,7 @@ export default function CreateVideoPage() {
                       {/* PRIMARY */}
                       <div className="flex items-center group/track">
                         <div className={`${timelineLabelWidthClass} flex-shrink-0 text-sm text-slate-400 px-2 flex items-center gap-2`}><VideoIcon className="h-4 w-4" /> Primary</div>
-                        <div className={`relative flex-1 bg-slate-900/50 rounded-r-md border-y border-r border-slate-800/80 ${sceneRowHeight} flex`}>
+                        <div className={`timeline-track-surface relative flex-1 bg-slate-900/50 rounded-r-md border-y border-r border-slate-800/80 ${sceneRowHeight} flex`}>
                           {scene.primaryAssets.map((asset, index) =>
                             renderTimelineAsset(asset, 'primary', () => handleRemoveAsset(scene.id, 'primary', asset.id), scene.id, displayDuration, index, undefined, scene.primaryAssets.length)
                           )}
@@ -2593,7 +2738,7 @@ export default function CreateVideoPage() {
                       {scene.secondaryAssets.map((row, rowIndex) => (
                         <div key={`sec-row-${rowIndex}`} className="flex items-center group/track">
                           <div className={`${timelineLabelWidthClass} flex-shrink-0 text-sm text-slate-400 px-2 flex items-center gap-2`}><ImageIcon className="h-4 w-4" /> Overlay {rowIndex + 1}</div>
-                          <div className={`relative flex-1 bg-slate-900/50 rounded-r-md border-y border-r border-slate-800/80 ${sceneRowHeight}`}>
+                          <div className={`timeline-track-surface relative flex-1 bg-slate-900/50 rounded-r-md border-y border-r border-slate-800/80 ${sceneRowHeight}`}>
                             {row.map((asset, index) => renderTimelineAsset(asset, 'secondary', () => handleRemoveAsset(scene.id, 'secondary', asset.id, rowIndex), scene.id, displayDuration, index, rowIndex, row.length))}
                             <div className="absolute right-2 top-1/2 -translate-y-1/2 z-20 opacity-0 group-hover/track:opacity-100 transition-opacity pointer-events-none">
                                 <Button size="sm" variant="secondary" className="h-8 shadow-lg border-slate-700 pointer-events-auto" onClick={() => openAssetPicker({ sceneId: scene.id, rowType: 'secondary', secondaryOverlapIndex: rowIndex }, ['image', 'video'])}><Plus className="h-4 w-4" /></Button>
@@ -2612,7 +2757,7 @@ export default function CreateVideoPage() {
                       {/* SUBTITLES */}
                       <div className="flex items-center group/track mt-2">
                         <div className={`${timelineLabelWidthClass} flex-shrink-0 text-sm text-slate-400 px-2 flex items-center gap-2`}><Type className="h-4 w-4" /> Subtitles</div>
-                        <div className={`relative flex-1 bg-slate-900/50 rounded-r-md border-y border-r border-slate-800/80 h-16`}>
+                        <div className={`timeline-track-surface relative flex-1 bg-slate-900/50 rounded-r-md border-y border-r border-slate-800/80 h-16`}>
                           {scene.subtitle ? (
                             <div className="absolute top-1 bottom-1 bg-blue-900/30 border border-blue-500/40 rounded-md flex items-center px-3 group overflow-hidden" style={{ left: '0%', width: `${subtitleWidthPct || 100}%`}}>
                               <div className="flex items-center gap-3 truncate pr-16">
@@ -2643,7 +2788,7 @@ export default function CreateVideoPage() {
                       {/* NARRATION */}
                       <div className="flex items-center group/track pt-1">
                         <div className={`${timelineLabelWidthClass} flex-shrink-0 text-sm text-slate-400 px-2 flex items-center gap-2`}><Mic className="h-4 w-4" /> Narration</div>
-                        <div className={`relative flex-1 bg-slate-900/50 rounded-r-md border-y border-r border-slate-800/80 h-20`}>
+                        <div className={`timeline-track-surface relative flex-1 bg-slate-900/50 rounded-r-md border-y border-r border-slate-800/80 h-20`}>
                           {scene.narration ? renderTimelineAsset(scene.narration, 'narration', () => handleRemoveAsset(scene.id, 'narration', scene.narration!.id), scene.id, displayDuration) : (
                             <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover/track:opacity-100 transition-opacity">
                                 <Button size="sm" variant="secondary" onClick={() => openAssetPicker({ sceneId: scene.id, rowType: 'narration' }, ['audio'])}><Plus className="h-4 w-4 mr-2" /> Add Narration</Button>
