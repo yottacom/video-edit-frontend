@@ -1,14 +1,29 @@
 // API Client for Video Editor Backend
 import axios, { InternalAxiosRequestConfig } from 'axios';
 import { useDebugStore } from './debug-store';
-import { MultipartListPart, MultipartStartResponse, PartUrlResponse, UploadItem } from '@/types';
+import {
+  AssetItem,
+  AssetGenerationJobResponse,
+  AssetPresignedUploadResponse,
+  AssetType,
+  CustomVideo,
+  CustomVideoScene,
+  CustomVideoScenePayload,
+  ElevenLabsVoiceListResponse,
+  MultipartListPart,
+  MultipartStartResponse,
+  PaginatedResponse,
+  PartUrlResponse,
+  UploadItem,
+} from '@/types';
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'https://video-edit.yt1.co';
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'https://7144-81-245-96-223.ngrok-free.app';
 
 export const api = axios.create({
   baseURL: API_BASE_URL,
   headers: {
     'Content-Type': 'application/json',
+    'ngrok-skip-browser-warning': 'true',
   },
 });
 
@@ -76,6 +91,12 @@ function serializeHeaders(headers: unknown): Record<string, string> {
 
 // Add auth token and debug tracking to requests
 api.interceptors.request.use((config: InternalAxiosRequestConfig) => {
+  const method = config.method?.toLowerCase();
+
+  if (method === 'get') {
+    config.headers['ngrok-skip-browser-warning'] = 'true';
+  }
+
   if (typeof window !== 'undefined') {
     const token = localStorage.getItem('token');
     if (token) {
@@ -140,6 +161,48 @@ api.interceptors.response.use(
     return Promise.reject(error);
   }
 );
+
+export function getApiErrorMessage(error: unknown, fallback = 'Something went wrong.') {
+  if (axios.isAxiosError(error)) {
+    const details = error.response?.data?.detail;
+
+    if (Array.isArray(details) && details.length > 0) {
+      const firstDetail = details[0];
+
+      if (typeof firstDetail === 'string') {
+        return firstDetail;
+      }
+
+      if (firstDetail && typeof firstDetail === 'object') {
+        if (typeof firstDetail.msg === 'string') {
+          return firstDetail.msg;
+        }
+
+        if (typeof firstDetail.message === 'string') {
+          return firstDetail.message;
+        }
+      }
+    }
+
+    if (typeof error.response?.data?.detail === 'string') {
+      return error.response.data.detail;
+    }
+
+    if (typeof error.response?.data?.message === 'string') {
+      return error.response.data.message;
+    }
+
+    if (typeof error.message === 'string' && error.message.trim()) {
+      return error.message;
+    }
+  }
+
+  if (error instanceof Error && error.message.trim()) {
+    return error.message;
+  }
+
+  return fallback;
+}
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // AUTH API
@@ -247,6 +310,202 @@ export const musicTracksApi = {
   
   delete: async (id: string) => {
     const res = await api.delete(`/api/editor/music-tracks/${id}`);
+    return res.data;
+  },
+};
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ASSETS API
+// ═══════════════════════════════════════════════════════════════════════════════
+
+export const assetsApi = {
+  list: async (params?: {
+    page?: number;
+    page_size?: number;
+    asset_type?: AssetType;
+    source_type?: 'generated' | 'uploaded';
+    search?: string;
+  }): Promise<PaginatedResponse<AssetItem>> => {
+    const res = await api.get('/api/assets', { params });
+    return res.data;
+  },
+
+  getPresignedUploadUrl: async (payload: {
+    filename: string;
+    content_type?: string;
+    asset_type?: AssetType;
+  }): Promise<AssetPresignedUploadResponse> => {
+    const res = await api.post('/api/assets/presigned-url', payload);
+    return res.data;
+  },
+
+  registerExisting: async (payload: {
+    s3_key: string;
+    title: string;
+    content_type: string;
+    asset_type?: AssetType;
+  }): Promise<AssetItem> => {
+    const res = await api.post('/api/assets/register-existing', payload);
+    return res.data;
+  },
+
+  upload: async (file: File, title?: string, assetType?: AssetType): Promise<AssetItem> => {
+    const formData = new FormData();
+    formData.append('file', file);
+    if (title) formData.append('title', title);
+    if (assetType) formData.append('asset_type', assetType);
+
+    const res = await api.post('/api/assets/upload', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    });
+    return res.data;
+  },
+
+  generate: async (payload: {
+    asset_type: AssetType;
+    prompt?: string;
+    text?: string;
+    aspect_ratio?: '16:9' | '9:16' | '1:1';
+    duration_seconds?: number;
+    elevenlabs_voice_id?: string;
+  }): Promise<AssetGenerationJobResponse> => {
+    const res = await api.post('/api/assets/generate', payload);
+    return res.data;
+  },
+
+  pollGenerationJob: async (jobId: string, pollUrl?: string): Promise<AssetGenerationJobResponse> => {
+    const res = await api.get(pollUrl || `/api/assets/generate/${jobId}`);
+    return res.data;
+  },
+
+  listElevenLabsVoices: async (params?: {
+    page_size?: number;
+    next_page_token?: string;
+    search?: string;
+    sort?: string;
+    sort_direction?: 'asc' | 'desc';
+    voice_type?: string;
+    category?: string;
+  }): Promise<ElevenLabsVoiceListResponse> => {
+    const res = await api.get('/api/assets/elevenlabs/voices', { params });
+    return res.data;
+  },
+
+  delete: async (assetId: string) => {
+    const res = await api.delete(`/api/assets/${assetId}`);
+    return res.data;
+  },
+
+  uploadToPresignedUrl: async (presignedUrl: string, file: File, contentType?: string) => {
+    const res = await axios.put(presignedUrl, file, {
+      headers: {
+        'Content-Type': contentType || file.type || 'application/octet-stream',
+      },
+    });
+    return res.data;
+  },
+};
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// CUSTOM VIDEOS API
+// ═══════════════════════════════════════════════════════════════════════════════
+
+export const customVideosApi = {
+  list: async (
+    page = 1,
+    pageSize = 100,
+    status?: string
+  ): Promise<PaginatedResponse<CustomVideo>> => {
+    const res = await api.get('/api/custom-videos', {
+      params: {
+        page,
+        page_size: pageSize,
+        ...(status ? { status } : {}),
+      },
+    });
+    return res.data;
+  },
+
+  start: async (payload: {
+    video_type: 'portrait' | 'landscape';
+    title?: string;
+    background_music_mood?: string;
+  }): Promise<CustomVideo> => {
+    const res = await api.post('/api/custom-videos/start', payload);
+    return res.data;
+  },
+
+  get: async (customVideoId: string): Promise<CustomVideo> => {
+    const res = await api.get(`/api/custom-videos/${customVideoId}`);
+    return res.data;
+  },
+
+  addScene: async (
+    customVideoId: string,
+    payload: CustomVideoScenePayload
+  ): Promise<CustomVideoScene> => {
+    const res = await api.post(`/api/custom-videos/${customVideoId}/scenes`, payload);
+    return res.data;
+  },
+
+  getScene: async (
+    customVideoId: string,
+    sceneId: string
+  ): Promise<CustomVideoScene> => {
+    const res = await api.get(`/api/custom-videos/${customVideoId}/scenes/${sceneId}`);
+    return res.data;
+  },
+
+  bulkReplaceScenes: async (
+    customVideoId: string,
+    scenes: CustomVideoScenePayload[]
+  ): Promise<CustomVideo> => {
+    const res = await api.put(`/api/custom-videos/${customVideoId}/scenes/bulk`, { scenes });
+    return res.data;
+  },
+
+  update: async (
+    customVideoId: string,
+    payload: { title?: string; background_music_mood?: string }
+  ): Promise<CustomVideo> => {
+    const res = await api.patch(`/api/custom-videos/${customVideoId}`, payload);
+    return res.data;
+  },
+
+  updateScene: async (
+    customVideoId: string,
+    sceneId: string,
+    payload: CustomVideoScenePayload
+  ): Promise<CustomVideoScene> => {
+    const res = await api.patch(`/api/custom-videos/${customVideoId}/scenes/${sceneId}`, payload);
+    return res.data;
+  },
+
+  finalize: async (
+    customVideoId: string,
+    payload?: {
+      music_track_id?: string | null;
+      override_config?: Record<string, unknown>;
+    }
+  ): Promise<CustomVideo> => {
+    const res = await api.post(`/api/custom-videos/${customVideoId}/finalize`, payload || {});
+    return res.data;
+  },
+
+  poll: async (customVideoId: string, renderId?: string): Promise<CustomVideo> => {
+    const res = await api.get(`/api/custom-videos/${customVideoId}/poll`, {
+      params: renderId ? { render_id: renderId } : undefined,
+    });
+    return res.data;
+  },
+
+  delete: async (customVideoId: string) => {
+    const res = await api.delete(`/api/custom-videos/${customVideoId}`);
+    return res.data;
+  },
+
+  deleteScene: async (customVideoId: string, sceneId: string) => {
+    const res = await api.delete(`/api/custom-videos/${customVideoId}/scenes/${sceneId}`);
     return res.data;
   },
 };

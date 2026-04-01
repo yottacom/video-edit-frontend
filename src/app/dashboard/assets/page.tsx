@@ -1,13 +1,12 @@
 'use client';
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   Upload,
   Sparkles,
   Image as ImageIcon,
   Video as VideoIcon,
   X,
-  Plus,
   Trash2,
   Download,
   Loader2,
@@ -15,87 +14,48 @@ import {
   PlayCircle,
   Clock,
   Video,
+  AudioLines,
+  RefreshCw,
+  Search,
+  Check,
+  ChevronRight,
+  ChevronLeft,
 } from 'lucide-react';
 import { DashboardLayout } from '@/components/layout/DashboardLayout';
 import { Card, CardContent } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
-import { Input } from '@/components/ui/Input'; // Assuming Input component still exists
+import { Input } from '@/components/ui/Input';
+import { assetsApi, getApiErrorMessage } from '@/lib/api';
+import { AssetGenerationJobResponse, AssetItem, AssetStatus, AssetType, ElevenLabsVoice } from '@/types';
 
 // --- Asset Data Types ---
 interface BaseAsset {
   id: string;
   title: string;
-  type: 'image' | 'video';
+  type: AssetType;
   source: 'uploaded' | 'ai_generated';
+  status: AssetStatus;
+  url: string | null;
+  thumbnailUrl: string | null;
   created_at: string;
 }
 
 interface ImageAsset extends BaseAsset {
   type: 'image';
-  url: string; // URL for the image
-  prompt?: string; // Only for AI-generated images
 }
 
 interface VideoAsset extends BaseAsset {
   type: 'video';
-  url: string; // URL for the video
-  thumbnailUrl: string; // Thumbnail for video preview
-  duration_seconds: number;
-  prompt?: string; // Only for AI-generated videos
 }
 
-type Asset = ImageAsset | VideoAsset;
+interface AudioAsset extends BaseAsset {
+  type: 'audio';
+}
 
-// --- Dummy Data ---
-const dummyAssets: Asset[] = [
-  {
-    id: 'asset-1',
-    title: 'Uploaded Product Shot',
-    type: 'image',
-    source: 'uploaded',
-    url: 'https://via.placeholder.com/400x300?text=Uploaded+Image',
-    created_at: '2023-10-28T10:00:00Z',
-  },
-  {
-    id: 'asset-2',
-    title: 'AI Cityscape',
-    type: 'image',
-    source: 'ai_generated',
-    url: 'https://via.placeholder.com/400x300?text=AI+Cityscape',
-    prompt: 'A futuristic cityscape at sunset with flying cars',
-    created_at: '2023-10-27T15:30:00Z',
-  },
-  {
-    id: 'asset-3',
-    title: 'Uploaded Explainer Video',
-    type: 'video',
-    source: 'uploaded',
-    url: 'https://www.w3schools.com/html/mov_bbb.mp4',
-    thumbnailUrl: 'https://via.placeholder.com/400x225?text=Explainer+Video+Thumb',
-    duration_seconds: 120,
-    created_at: '2023-10-26T09:00:00Z',
-  },
-  {
-    id: 'asset-4',
-    title: 'AI Abstract Animation',
-    type: 'video',
-    source: 'ai_generated',
-    url: 'https://www.w3schools.com/html/mov_bbb.mp4',
-    thumbnailUrl: 'https://via.placeholder.com/400x225?text=AI+Video+Thumb',
-    duration_seconds: 60,
-    prompt: 'Short abstract animation with glowing particles',
-    created_at: '2023-10-25T11:45:00Z',
-  },
-  {
-    id: 'asset-5',
-    title: 'Uploaded Selfie',
-    type: 'image',
-    source: 'uploaded',
-    url: 'https://via.placeholder.com/400x300?text=User+Selfie',
-    created_at: '2023-10-24T18:00:00Z',
-  },
-];
+type Asset = ImageAsset | VideoAsset | AudioAsset;
+type AssetTypeFilter = AssetType | 'all';
+type AssetSourceFilter = 'all' | 'generated' | 'uploaded';
 
 // --- Helper Functions ---
 function formatDateTime(value: string) {
@@ -106,15 +66,225 @@ function formatDateTime(value: string) {
   });
 }
 
-function formatDuration(seconds: number) {
-  const minutes = Math.floor(seconds / 60);
-  const remainingSeconds = seconds % 60;
-  return `${minutes}:${remainingSeconds.toString().padStart(2, '0')}`;
+function mapAsset(item: AssetItem): Asset {
+  return {
+    id: item.id,
+    title: item.title,
+    type: item.asset_type,
+    source: item.source_type === 'generated' ? 'ai_generated' : 'uploaded',
+    status: item.status,
+    url: item.url,
+    thumbnailUrl: item.thumbnail_url,
+    created_at: item.created_at || new Date().toISOString(),
+  } as Asset;
+}
+
+function getAssetTypeLabel(type: Asset['type']) {
+  switch (type) {
+    case 'image':
+      return 'Image';
+    case 'video':
+      return 'Video';
+    case 'audio':
+      return 'Audio';
+    default:
+      return type;
+  }
+}
+
+function getAssetIcon(type: Asset['type']) {
+  switch (type) {
+    case 'image':
+      return <ImageIcon className="h-10 w-10 text-slate-500" />;
+    case 'video':
+      return <VideoIcon className="h-10 w-10 text-slate-500" />;
+    case 'audio':
+      return <AudioLines className="h-10 w-10 text-slate-500" />;
+    default:
+      return <FileText className="h-10 w-10 text-slate-500" />;
+  }
+}
+
+function getStatusBadgeClass(status: AssetStatus) {
+  switch (status) {
+    case 'ready':
+      return 'border-emerald-400/20 bg-emerald-500/15 text-emerald-200';
+    case 'processing':
+      return 'border-amber-400/20 bg-amber-500/15 text-amber-200';
+    case 'failed':
+      return 'border-red-400/20 bg-red-500/15 text-red-200';
+    default:
+      return 'border-slate-500/20 bg-slate-700/50 text-slate-200';
+  }
+}
+
+function getVoiceMeta(voice: ElevenLabsVoice) {
+  return [voice.gender, voice.age, voice.accent || voice.language || voice.locale].filter(Boolean).join(' • ');
+}
+
+interface VoicePickerModalProps {
+  open: boolean;
+  onClose: () => void;
+  voices: ElevenLabsVoice[];
+  loading: boolean;
+  loadingMore: boolean;
+  hasMore: boolean;
+  searchValue: string;
+  selectedVoiceId: string | null;
+  onSearchChange: (value: string) => void;
+  onSelect: (voice: ElevenLabsVoice) => void;
+  onScrollEnd: () => void;
+}
+
+function VoicePickerModal({
+  open,
+  onClose,
+  voices,
+  loading,
+  loadingMore,
+  hasMore,
+  searchValue,
+  selectedVoiceId,
+  onSearchChange,
+  onSelect,
+  onScrollEnd,
+}: VoicePickerModalProps) {
+  if (!open) {
+    return null;
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-[60] flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm"
+      onClick={onClose}
+    >
+      <Card
+        className="flex max-h-[90vh] w-full max-w-4xl flex-col overflow-hidden border-slate-700/70 bg-slate-900 shadow-2xl"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="relative border-b border-slate-700/50 p-6">
+          <h2 className="text-2xl font-semibold text-white">Select ElevenLabs Voice</h2>
+          <p className="mt-2 text-sm text-slate-400">
+            Search and browse voices, then choose one for AI audio generation.
+          </p>
+          <button
+            type="button"
+            onClick={onClose}
+            className="absolute right-4 top-4 rounded-full border border-white/10 bg-slate-800/50 p-2 text-slate-200 transition-colors hover:bg-slate-800 hover:text-white"
+            aria-label="Close voice picker"
+          >
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+
+        <CardContent className="flex min-h-0 flex-1 flex-col gap-4 p-6">
+          <div className="relative">
+            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
+            <Input
+              placeholder="Search voices by name, accent, or description"
+              value={searchValue}
+              onChange={(event) => onSearchChange(event.target.value)}
+              className="pl-10"
+            />
+          </div>
+
+          <div
+            className="min-h-0 flex-1 space-y-3 overflow-y-auto pr-1"
+            onScroll={(event) => {
+              const target = event.currentTarget;
+              const distanceFromBottom = target.scrollHeight - target.scrollTop - target.clientHeight;
+              if (distanceFromBottom < 120 && hasMore && !loading && !loadingMore) {
+                onScrollEnd();
+              }
+            }}
+          >
+            {loading ? (
+              <div className="flex min-h-60 items-center justify-center text-slate-400">
+                <Loader2 className="mr-3 h-5 w-5 animate-spin text-violet-400" />
+                Loading voices...
+              </div>
+            ) : voices.length === 0 ? (
+              <div className="flex min-h-60 items-center justify-center text-center text-slate-400">
+                No voices found for this search.
+              </div>
+            ) : (
+              voices.map((voice) => (
+                <button
+                  key={voice.voice_id}
+                  type="button"
+                  onClick={() => onSelect(voice)}
+                  className={`w-full rounded-2xl border p-4 text-left transition-all ${
+                    selectedVoiceId === voice.voice_id
+                      ? 'border-violet-500 bg-violet-500/10'
+                      : 'border-slate-800 bg-slate-950 hover:border-slate-700 hover:bg-slate-900'
+                  }`}
+                >
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <h3 className="truncate text-base font-semibold text-white">{voice.name}</h3>
+                        {voice.category && (
+                          <span className="rounded-full border border-slate-700 bg-slate-900 px-2 py-0.5 text-[11px] uppercase tracking-wide text-slate-300">
+                            {voice.category}
+                          </span>
+                        )}
+                      </div>
+                      {voice.description && (
+                        <p className="mt-2 line-clamp-2 text-sm text-slate-400">{voice.description}</p>
+                      )}
+                      <div className="mt-3 flex flex-wrap gap-2 text-xs text-slate-400">
+                        {getVoiceMeta(voice) && (
+                          <span className="rounded-full bg-slate-900 px-2.5 py-1">{getVoiceMeta(voice)}</span>
+                        )}
+                        {voice.locale && (
+                          <span className="rounded-full bg-slate-900 px-2.5 py-1">{voice.locale}</span>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="flex shrink-0 items-center gap-2">
+                      {selectedVoiceId === voice.voice_id && (
+                        <span className="inline-flex items-center gap-1 rounded-full border border-violet-500/30 bg-violet-500/15 px-2 py-1 text-xs font-medium text-violet-200">
+                          <Check className="h-3.5 w-3.5" />
+                          Selected
+                        </span>
+                      )}
+                      <ChevronRight className="h-5 w-5 text-slate-500" />
+                    </div>
+                  </div>
+
+                  {voice.preview_url && (
+                    <div className="mt-4" onClick={(event) => event.stopPropagation()}>
+                      <audio src={voice.preview_url} controls className="w-full" />
+                    </div>
+                  )}
+                </button>
+              ))
+            )}
+
+            {loadingMore && (
+              <div className="flex items-center justify-center py-4 text-sm text-slate-400">
+                <Loader2 className="mr-2 h-4 w-4 animate-spin text-violet-400" />
+                Loading more voices...
+              </div>
+            )}
+          </div>
+        </CardContent>
+      </Card>
+    </div>
+  );
 }
 
 export default function AssetsPage() {
   const [assets, setAssets] = useState<Asset[]>([]);
+  const [totalAssets, setTotalAssets] = useState(0);
+  const [page, setPage] = useState(1);
+  const [searchInput, setSearchInput] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+  const [assetTypeFilter, setAssetTypeFilter] = useState<AssetTypeFilter>('all');
+  const [sourceTypeFilter, setSourceTypeFilter] = useState<AssetSourceFilter>('all');
   const [loadingAssets, setLoadingAssets] = useState(true);
+  const [refreshingAssets, setRefreshingAssets] = useState(false);
   const [assetToDelete, setAssetToDelete] = useState<Asset | null>(null);
   const [deletingAssetId, setDeletingAssetId] = useState<string | null>(null);
 
@@ -128,25 +298,78 @@ export default function AssetsPage() {
   // AI Create Modal State
   const [showAICreateModal, setShowAICreateModal] = useState(false);
   const [aiPrompt, setAiPrompt] = useState('');
-  const [aiContentType, setAiContentType] = useState<'image' | 'video'>('image');
+  const [aiContentType, setAiContentType] = useState<AssetType>('image');
+  const [aiAspectRatio, setAiAspectRatio] = useState<'16:9' | '9:16' | '1:1'>('1:1');
+  const [aiDurationSeconds, setAiDurationSeconds] = useState('5');
+  const [selectedVoice, setSelectedVoice] = useState<ElevenLabsVoice | null>(null);
   const [generatingAI, setGeneratingAI] = useState(false);
+  const [pollingGeneration, setPollingGeneration] = useState(false);
+  const [generationJob, setGenerationJob] = useState<AssetGenerationJobResponse | null>(null);
+  const [generationError, setGenerationError] = useState<string | null>(null);
+  const [showVoicePickerModal, setShowVoicePickerModal] = useState(false);
+  const [voiceSearchInput, setVoiceSearchInput] = useState('');
+  const [debouncedVoiceSearch, setDebouncedVoiceSearch] = useState('');
+  const [voices, setVoices] = useState<ElevenLabsVoice[]>([]);
+  const [loadingVoices, setLoadingVoices] = useState(false);
+  const [loadingMoreVoices, setLoadingMoreVoices] = useState(false);
+  const [voicesNextPageToken, setVoicesNextPageToken] = useState<string | null>(null);
+  const [voicesHasMore, setVoicesHasMore] = useState(false);
 
   // Video Player Modal State
   const [showVideoPlayerModal, setShowVideoPlayerModal] = useState<VideoAsset | null>(null);
   const videoPlayerRef = useRef<HTMLVideoElement>(null);
-  const [isPlayingVideo, setIsPlayingVideo] = useState(false);
+  const [showImageModal, setShowImageModal] = useState<ImageAsset | null>(null);
+  const [showAudioPlayerModal, setShowAudioPlayerModal] = useState<AudioAsset | null>(null);
+  const isGenerationBusy = generatingAI || pollingGeneration;
+  const pageSize = 20;
+  const totalPages = Math.max(1, Math.ceil(totalAssets / pageSize));
+  const hasActiveFilters =
+    debouncedSearch.length > 0 || assetTypeFilter !== 'all' || sourceTypeFilter !== 'all';
 
   // --- Effects ---
-  useEffect(() => {
-    // Simulate API call to load assets
-    const fetchAssets = async () => {
+  const loadAssets = useCallback(async (mode: 'initial' | 'refresh' = 'initial') => {
+    if (mode === 'initial') {
       setLoadingAssets(true);
-      await new Promise((resolve) => setTimeout(resolve, 1000));
-      setAssets(dummyAssets);
+    } else {
+      setRefreshingAssets(true);
+    }
+
+    try {
+      const data = await assetsApi.list({
+        page,
+        page_size: pageSize,
+        asset_type: assetTypeFilter === 'all' ? undefined : assetTypeFilter,
+        source_type: sourceTypeFilter === 'all' ? undefined : sourceTypeFilter,
+        search: debouncedSearch || undefined,
+      });
+      setAssets(data.items.map(mapAsset));
+      setTotalAssets(data.total);
+    } catch (error) {
+      console.error('Failed to load assets:', error);
+      alert(getApiErrorMessage(error, 'Failed to load assets.'));
+    } finally {
       setLoadingAssets(false);
+      setRefreshingAssets(false);
+    }
+  }, [assetTypeFilter, debouncedSearch, page, sourceTypeFilter]);
+
+  useEffect(() => {
+    void loadAssets();
+  }, [loadAssets]);
+
+  useEffect(() => {
+    const timeoutId = window.setTimeout(() => {
+      setDebouncedSearch(searchInput.trim());
+    }, 300);
+
+    return () => {
+      window.clearTimeout(timeoutId);
     };
-    void fetchAssets();
-  }, []);
+  }, [searchInput]);
+
+  useEffect(() => {
+    setPage(1);
+  }, [debouncedSearch, assetTypeFilter, sourceTypeFilter]);
 
   useEffect(() => {
     // Cleanup for file preview URL
@@ -160,7 +383,7 @@ export default function AssetsPage() {
   useEffect(() => {
     // Handle body overflow for modals
     const previousOverflow = document.body.style.overflow;
-    if (showUploadModal || showAICreateModal || showVideoPlayerModal) {
+    if (showUploadModal || showAICreateModal || showVideoPlayerModal || showImageModal || showAudioPlayerModal || showVoicePickerModal) {
       document.body.style.overflow = 'hidden';
     } else {
       document.body.style.overflow = previousOverflow;
@@ -168,7 +391,126 @@ export default function AssetsPage() {
     return () => {
       document.body.style.overflow = previousOverflow;
     };
-  }, [showUploadModal, showAICreateModal, showVideoPlayerModal]);
+  }, [showUploadModal, showAICreateModal, showVideoPlayerModal, showImageModal, showAudioPlayerModal, showVoicePickerModal]);
+
+  useEffect(() => {
+    const timeoutId = window.setTimeout(() => {
+      setDebouncedVoiceSearch(voiceSearchInput.trim());
+    }, 300);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [voiceSearchInput]);
+
+  const loadVoices = useCallback(async (
+    mode: 'reset' | 'append' = 'reset',
+    nextPageToken?: string | null
+  ) => {
+    if (mode === 'reset') {
+      setLoadingVoices(true);
+    } else {
+      setLoadingMoreVoices(true);
+    }
+
+    try {
+      const response = await assetsApi.listElevenLabsVoices({
+        page_size: 20,
+        next_page_token: mode === 'append' ? nextPageToken || undefined : undefined,
+        search: debouncedVoiceSearch || undefined,
+      });
+
+      setVoices((currentVoices) =>
+        mode === 'append' ? [...currentVoices, ...response.items] : response.items
+      );
+      setVoicesNextPageToken(response.next_page_token || null);
+      setVoicesHasMore(response.has_more);
+    } catch (error) {
+      console.error('Failed to load ElevenLabs voices:', error);
+      alert(getApiErrorMessage(error, 'Failed to load ElevenLabs voices.'));
+    } finally {
+      setLoadingVoices(false);
+      setLoadingMoreVoices(false);
+    }
+  }, [debouncedVoiceSearch]);
+
+  useEffect(() => {
+    if (!showVoicePickerModal) {
+      return;
+    }
+
+    void loadVoices('reset');
+  }, [showVoicePickerModal, debouncedVoiceSearch, loadVoices]);
+
+  const resetAiGenerationState = useCallback(() => {
+    setGeneratingAI(false);
+    setPollingGeneration(false);
+    setGenerationJob(null);
+    setGenerationError(null);
+  }, []);
+
+  useEffect(() => {
+    if (!generationJob?.job_id || !pollingGeneration) {
+      return;
+    }
+
+    let cancelled = false;
+
+    const pollJob = async () => {
+      try {
+        const result = await assetsApi.pollGenerationJob(generationJob.job_id!, generationJob.poll_url || undefined);
+
+        if (cancelled) {
+          return;
+        }
+
+        setGenerationJob(result);
+
+        if (result.asset) {
+          if (page === 1) {
+            void loadAssets('refresh');
+          } else {
+            setPage(1);
+          }
+          setShowAICreateModal(false);
+          setAiPrompt('');
+          setAiContentType('image');
+          setAiAspectRatio('1:1');
+          setAiDurationSeconds('5');
+          setSelectedVoice(null);
+          setVoiceSearchInput('');
+          setDebouncedVoiceSearch('');
+          setShowVoicePickerModal(false);
+          resetAiGenerationState();
+          return;
+        }
+
+        if (result.status === 'failed') {
+          setPollingGeneration(false);
+          setGenerationError(result.error || 'AI generation failed.');
+          return;
+        }
+
+        window.setTimeout(() => {
+          if (!cancelled) {
+            void pollJob();
+          }
+        }, 1500);
+      } catch (error) {
+        if (!cancelled) {
+          console.error('Failed to poll generation job:', error);
+          setPollingGeneration(false);
+          setGenerationError(getApiErrorMessage(error, 'Failed to poll asset generation progress.'));
+        }
+      }
+    };
+
+    void pollJob();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [generationJob?.job_id, generationJob?.poll_url, loadAssets, page, pollingGeneration, resetAiGenerationState]);
 
   // --- Handlers ---
   const handleFileSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -180,15 +522,19 @@ export default function AssetsPage() {
       }
 
       // Basic validation
-      if (!file.type.startsWith('image/') && !file.type.startsWith('video/')) {
-        alert('Please select an image or video file.');
+      if (
+        !file.type.startsWith('image/') &&
+        !file.type.startsWith('video/') &&
+        !file.type.startsWith('audio/')
+      ) {
+        alert('Please select an image, video, or audio file.');
         setSelectedFile(null);
         setFilePreviewUrl(null);
         return;
       }
 
       setSelectedFile(file);
-      setFilePreviewUrl(URL.createObjectURL(file));
+      setFilePreviewUrl(file.type.startsWith('audio/') ? null : URL.createObjectURL(file));
     } else {
       setSelectedFile(null);
       setFilePreviewUrl(null);
@@ -200,27 +546,27 @@ export default function AssetsPage() {
 
     setUploading(true);
     try {
-      await new Promise((resolve) => setTimeout(resolve, 1500)); // Simulate upload
-      const newAsset: Asset = {
-        id: `uploaded-${Date.now()}`,
-        title: selectedFile.name.split('.')[0] || 'Untitled Asset',
-        type: selectedFile.type.startsWith('image/') ? 'image' : 'video',
-        source: 'uploaded',
-        url: filePreviewUrl!, // Use the preview URL as the final URL for dummy data
-        created_at: new Date().toISOString(),
-        ...(selectedFile.type.startsWith('video/') && {
-          thumbnailUrl: 'https://via.placeholder.com/400x225?text=Video+Thumb', // Placeholder for video thumbnail
-          duration_seconds: 30, // Dummy duration
-        }),
-      };
-      setAssets((prev) => [newAsset, ...prev]);
+      const assetType: AssetType = selectedFile.type.startsWith('image/')
+        ? 'image'
+        : selectedFile.type.startsWith('video/')
+          ? 'video'
+          : 'audio';
+      await assetsApi.upload(
+        selectedFile,
+        selectedFile.name.replace(/\.[^/.]+$/, ''),
+        assetType
+      );
+      if (page === 1) {
+        await loadAssets('refresh');
+      } else {
+        setPage(1);
+      }
       setShowUploadModal(false);
       setSelectedFile(null);
       setFilePreviewUrl(null);
-      alert('File uploaded successfully!');
     } catch (error) {
       console.error('Upload failed:', error);
-      alert('Upload failed. Please try again.');
+      alert(getApiErrorMessage(error, 'Upload failed. Please try again.'));
     } finally {
       setUploading(false);
     }
@@ -229,33 +575,45 @@ export default function AssetsPage() {
   const handleAICreateSubmit = async () => {
     if (!aiPrompt.trim()) return;
 
+    setGenerationError(null);
     setGeneratingAI(true);
     try {
-      await new Promise((resolve) => setTimeout(resolve, 2500)); // Simulate AI generation
-      const newAsset: Asset = {
-        id: `ai-${aiContentType}-${Date.now()}`,
-        title: `AI Generated ${aiContentType === 'image' ? 'Image' : 'Video'}`,
-        type: aiContentType,
-        source: 'ai_generated',
-        url:
-          aiContentType === 'image'
-            ? `https://via.placeholder.com/400x300?text=AI+${aiContentType}+Generated`
-            : 'https://www.w3schools.com/html/mov_bbb.mp4',
-        created_at: new Date().toISOString(),
-        prompt: aiPrompt,
-        ...(aiContentType === 'video' && {
-          thumbnailUrl: `https://via.placeholder.com/400x225?text=AI+${aiContentType}+Thumb`,
-          duration_seconds: 45, // Dummy duration
-        }),
-      };
-      setAssets((prev) => [newAsset, ...prev]);
-      setShowAICreateModal(false);
-      setAiPrompt('');
-      setAiContentType('image');
-      alert('AI content generated successfully!');
+      const response = await assetsApi.generate({
+        asset_type: aiContentType,
+        prompt: aiContentType === 'audio' ? undefined : aiPrompt,
+        text: aiContentType === 'audio' ? aiPrompt : undefined,
+        aspect_ratio: aiContentType === 'audio' ? undefined : aiAspectRatio,
+        duration_seconds: Number(aiDurationSeconds) || 5,
+        elevenlabs_voice_id: aiContentType === 'audio' && selectedVoice ? selectedVoice.voice_id : undefined,
+      });
+
+      if (response.asset) {
+        if (page === 1) {
+          await loadAssets('refresh');
+        } else {
+          setPage(1);
+        }
+        setShowAICreateModal(false);
+        setAiPrompt('');
+        setAiContentType('image');
+        setAiAspectRatio('1:1');
+        setAiDurationSeconds('5');
+        setSelectedVoice(null);
+        setVoiceSearchInput('');
+        setDebouncedVoiceSearch('');
+        setShowVoicePickerModal(false);
+        setGenerationJob(null);
+      } else {
+        setGenerationJob(response);
+        if (response.job_id) {
+          setPollingGeneration(true);
+        } else {
+          setGenerationError('Generation started, but no polling information was returned.');
+        }
+      }
     } catch (error) {
       console.error('AI generation failed:', error);
-      alert('AI generation failed. Please try again.');
+      setGenerationError(getApiErrorMessage(error, 'AI generation failed. Please try again.'));
     } finally {
       setGeneratingAI(false);
     }
@@ -266,31 +624,36 @@ export default function AssetsPage() {
 
     setDeletingAssetId(assetToDelete.id);
     try {
-      await new Promise((resolve) => setTimeout(resolve, 500)); // Simulate deletion
-      setAssets((prev) => prev.filter((asset) => asset.id !== assetToDelete.id));
-
-      // Close video player if the deleted asset was playing
+      await assetsApi.delete(assetToDelete.id);
       if (showVideoPlayerModal?.id === assetToDelete.id) {
         setShowVideoPlayerModal(null);
       }
+      if (showImageModal?.id === assetToDelete.id) {
+        setShowImageModal(null);
+      }
+      if (showAudioPlayerModal?.id === assetToDelete.id) {
+        setShowAudioPlayerModal(null);
+      }
+      if (assets.length === 1 && page > 1) {
+        setPage((currentPage) => currentPage - 1);
+      } else {
+        await loadAssets('refresh');
+      }
       setAssetToDelete(null);
-      alert('Asset deleted successfully!');
     } catch (error) {
       console.error('Failed to delete asset:', error);
-      alert('Failed to delete asset. Please try again.');
+      alert(getApiErrorMessage(error, 'Failed to delete asset.'));
     } finally {
       setDeletingAssetId(null);
     }
   };
 
-  const toggleVideoPlayPause = () => {
-    if (videoPlayerRef.current) {
-      if (isPlayingVideo) {
-        videoPlayerRef.current.pause();
-      } else {
-        videoPlayerRef.current.play();
-      }
-      setIsPlayingVideo(!isPlayingVideo);
+  const handleCloseAICreateModal = () => {
+    setShowAICreateModal(false);
+
+    if (!isGenerationBusy) {
+      setAiPrompt('');
+      resetAiGenerationState();
     }
   };
 
@@ -313,6 +676,27 @@ export default function AssetsPage() {
         }}
         onConfirm={() => {
           void handleDeleteAsset();
+        }}
+      />
+
+      <VoicePickerModal
+        open={showVoicePickerModal}
+        onClose={() => setShowVoicePickerModal(false)}
+        voices={voices}
+        loading={loadingVoices}
+        loadingMore={loadingMoreVoices}
+        hasMore={voicesHasMore}
+        searchValue={voiceSearchInput}
+        selectedVoiceId={selectedVoice?.voice_id || null}
+        onSearchChange={setVoiceSearchInput}
+        onSelect={(voice) => {
+          setSelectedVoice(voice);
+          setShowVoicePickerModal(false);
+        }}
+        onScrollEnd={() => {
+          if (voicesHasMore && voicesNextPageToken) {
+            void loadVoices('append', voicesNextPageToken);
+          }
         }}
       />
 
@@ -356,7 +740,7 @@ export default function AssetsPage() {
                 type="file"
                 ref={fileInputRef}
                 className="hidden"
-                accept="image/*,video/*"
+                accept="image/*,video/*,audio/*"
                 onChange={handleFileSelect}
               />
 
@@ -367,17 +751,22 @@ export default function AssetsPage() {
                 >
                   <Upload className="h-12 w-12 text-slate-500 mb-4" />
                   <p className="text-white font-medium mb-2">Drag & Drop or Click to Browse</p>
-                  <p className="text-sm text-slate-400">Image (JPG, PNG, GIF) or Video (MP4, MOV)</p>
+                  <p className="text-sm text-slate-400">Image, video, or audio files are supported.</p>
                 </div>
               )}
 
-              {selectedFile && filePreviewUrl && (
+              {selectedFile && (
                 <div className="space-y-4">
                   <div className="relative w-full aspect-video rounded-lg overflow-hidden border border-slate-700 bg-slate-950 flex items-center justify-center">
-                    {selectedFile.type.startsWith('image/') ? (
+                    {selectedFile.type.startsWith('image/') && filePreviewUrl ? (
                       <img src={filePreviewUrl} alt="File preview" className="max-h-full max-w-full object-contain" />
-                    ) : (
+                    ) : selectedFile.type.startsWith('video/') && filePreviewUrl ? (
                       <video src={filePreviewUrl} controls className="max-h-full max-w-full object-contain" />
+                    ) : (
+                      <div className="flex flex-col items-center gap-3 text-slate-400">
+                        <AudioLines className="h-16 w-16" />
+                        <p className="text-sm">Audio files do not have an inline preview here.</p>
+                      </div>
                     )}
                     <button
                       type="button"
@@ -425,12 +814,7 @@ export default function AssetsPage() {
       {showAICreateModal && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm"
-          onClick={() => {
-            if (!generatingAI) {
-              setShowAICreateModal(false);
-              setAiPrompt('');
-            }
-          }}
+          onClick={handleCloseAICreateModal}
         >
           <Card
             className="w-full max-w-md"
@@ -441,15 +825,9 @@ export default function AssetsPage() {
                 <h2 className="text-xl font-semibold text-white">AI Generate Asset</h2>
                 <button
                   type="button"
-                  onClick={() => {
-                    if (!generatingAI) {
-                      setShowAICreateModal(false);
-                      setAiPrompt('');
-                    }
-                  }}
+                  onClick={handleCloseAICreateModal}
                   className="rounded-full border border-white/10 bg-slate-800/50 p-2 text-slate-200 transition-colors hover:bg-slate-800 hover:text-white"
                   aria-label="Close AI create modal"
-                  disabled={generatingAI}
                 >
                   <X className="h-5 w-5" />
                 </button>
@@ -462,12 +840,13 @@ export default function AssetsPage() {
                     <select
                       id="ai-content-type"
                       value={aiContentType}
-                      onChange={(e) => setAiContentType(e.target.value as 'image' | 'video')}
-                      disabled={generatingAI}
+                      onChange={(e) => setAiContentType(e.target.value as AssetType)}
+                      disabled={isGenerationBusy}
                       className="block w-full appearance-none rounded-md border border-slate-700 bg-slate-800 py-2 pl-3 pr-10 text-base text-white placeholder-slate-500 focus:border-violet-500 focus:ring-violet-500 sm:text-sm"
                     >
                       <option value="image">Image</option>
                       <option value="video">Video</option>
+                      <option value="audio">Audio</option>
                     </select>
                     <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2 text-slate-400">
                       <svg className="h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -481,32 +860,161 @@ export default function AssetsPage() {
                   <label htmlFor="ai-prompt" className="mb-2 block text-sm font-medium text-slate-300">Describe what you want to create</label>
                   <textarea
                     id="ai-prompt"
-                    placeholder={`e.g., A majestic dragon flying over a snowy mountain at dawn (for an ${aiContentType})`}
+                    placeholder={`Describe the ${aiContentType} you want to generate`}
                     value={aiPrompt}
                     onChange={(e) => setAiPrompt(e.target.value)}
-                    disabled={generatingAI}
+                    disabled={isGenerationBusy}
                     rows={4}
                     className="block w-full rounded-md border border-slate-700 bg-slate-800 p-3 text-base text-white placeholder-slate-500 shadow-sm focus:border-violet-500 focus:ring-violet-500 sm:text-sm"
                   />
                 </div>
+
+                {aiContentType !== 'audio' && (
+                  <div>
+                    <label htmlFor="ai-aspect-ratio" className="mb-2 block text-sm font-medium text-slate-300">Aspect Ratio</label>
+                    <select
+                      id="ai-aspect-ratio"
+                      value={aiAspectRatio}
+                      onChange={(e) => setAiAspectRatio(e.target.value as '16:9' | '9:16' | '1:1')}
+                      disabled={isGenerationBusy}
+                      className="block w-full rounded-md border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-white focus:border-violet-500 focus:ring-violet-500"
+                    >
+                      <option value="1:1">1:1</option>
+                      <option value="16:9">16:9</option>
+                      <option value="9:16">9:16</option>
+                    </select>
+                  </div>
+                )}
+
+                {aiContentType === 'video' ? (
+                  <div>
+                    <label htmlFor="ai-video-duration" className="mb-2 block text-sm font-medium text-slate-300">Duration (seconds)</label>
+                    <select
+                      id="ai-video-duration"
+                      value={aiDurationSeconds}
+                      onChange={(e) => setAiDurationSeconds(e.target.value)}
+                      disabled={isGenerationBusy}
+                      className="block w-full rounded-md border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-white focus:border-violet-500 focus:ring-violet-500"
+                    >
+                      <option value="5">5 seconds</option>
+                      <option value="10">10 seconds</option>
+                    </select>
+                  </div>
+                ) : (
+                  <Input
+                    label="Duration (seconds)"
+                    type="number"
+                    min="1"
+                    step="1"
+                    value={aiDurationSeconds}
+                    onChange={(e) => setAiDurationSeconds(e.target.value)}
+                    disabled={isGenerationBusy}
+                  />
+                )}
+
+                {aiContentType === 'audio' && (
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between">
+                      <label className="block text-sm font-medium text-slate-300">ElevenLabs Voice</label>
+                      {selectedVoice && (
+                        <button
+                          type="button"
+                          onClick={() => setSelectedVoice(null)}
+                          className="text-xs font-medium text-slate-400 transition-colors hover:text-white"
+                          disabled={isGenerationBusy}
+                        >
+                          Clear
+                        </button>
+                      )}
+                    </div>
+
+                    {selectedVoice ? (
+                      <div className="rounded-xl border border-violet-500/30 bg-violet-500/10 p-4">
+                        <div className="flex items-start justify-between gap-4">
+                          <div className="min-w-0">
+                            <p className="truncate text-sm font-semibold text-white">{selectedVoice.name}</p>
+                            {(selectedVoice.description || getVoiceMeta(selectedVoice)) && (
+                              <p className="mt-1 text-xs text-slate-300">
+                                {selectedVoice.description || getVoiceMeta(selectedVoice)}
+                              </p>
+                            )}
+                          </div>
+                          <span className="rounded-full border border-violet-500/30 bg-violet-500/15 px-2 py-1 text-[11px] font-medium text-violet-200">
+                            Selected
+                          </span>
+                        </div>
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={() => setShowVoicePickerModal(true)}
+                            disabled={isGenerationBusy}
+                          >
+                            Change Voice
+                          </Button>
+                        </div>
+                      </div>
+                    ) : (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="w-full justify-between"
+                        onClick={() => setShowVoicePickerModal(true)}
+                        disabled={isGenerationBusy}
+                      >
+                        <span>Select ElevenLabs Voice</span>
+                        <ChevronRight className="h-4 w-4" />
+                      </Button>
+                    )}
+                  </div>
+                )}
+
+                {generationJob && (
+                  <div className="rounded-xl border border-violet-500/20 bg-violet-500/10 p-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <p className="text-sm font-semibold text-white">Generation Progress</p>
+                        <p className="mt-1 text-xs text-slate-300">
+                          Status: {generationJob.status}
+                        </p>
+                      </div>
+                      <span className="rounded-full border border-violet-500/20 bg-slate-950/50 px-3 py-1 text-sm font-medium text-violet-200">
+                        {generationJob.progress ?? 0}%
+                      </span>
+                    </div>
+
+                    <div className="mt-3 h-2 w-full overflow-hidden rounded-full bg-slate-800">
+                      <div
+                        className="h-full rounded-full bg-gradient-to-r from-violet-500 to-indigo-500 transition-all duration-500"
+                        style={{ width: `${Math.min(100, Math.max(0, generationJob.progress ?? 0))}%` }}
+                      />
+                    </div>
+
+                    {generationJob.error && (
+                      <p className="mt-3 text-sm text-red-300">{generationJob.error}</p>
+                    )}
+                  </div>
+                )}
+
+                {generationError && (
+                  <div className="rounded-xl border border-red-500/20 bg-red-500/10 p-4">
+                    <p className="text-sm font-medium text-red-200">{generationError}</p>
+                  </div>
+                )}
               </div>
 
               <div className="mt-6 flex gap-3">
-                <Button variant="ghost" onClick={() => {
-                  if (!generatingAI) {
-                    setShowAICreateModal(false);
-                    setAiPrompt('');
-                  }
-                }} className="flex-1" disabled={generatingAI}>
-                  Cancel
+                <Button variant="ghost" onClick={handleCloseAICreateModal} className="flex-1">
+                  {isGenerationBusy ? 'Close' : 'Cancel'}
                 </Button>
                 <Button
                   onClick={handleAICreateSubmit}
                   loading={generatingAI}
-                  disabled={!aiPrompt.trim() || generatingAI}
+                  disabled={!aiPrompt.trim() || isGenerationBusy}
                   className="flex-1"
                 >
-                  {generatingAI ? 'Generating...' : `Generate ${aiContentType === 'image' ? 'Image' : 'Video'}`}
+                  {generatingAI ? 'Starting...' : pollingGeneration ? 'Generating...' : `Generate ${getAssetTypeLabel(aiContentType)}`}
                 </Button>
               </div>
             </CardContent>
@@ -526,12 +1034,6 @@ export default function AssetsPage() {
           >
             <div className="relative border-b border-slate-700/50 p-6">
               <h2 className="text-2xl font-semibold text-white">{showVideoPlayerModal.title}</h2>
-              {showVideoPlayerModal.prompt && (
-                <p className="mt-1 text-sm text-slate-400 flex items-center gap-2">
-                  <FileText className="h-4 w-4" />
-                  Prompt: "{showVideoPlayerModal.prompt}"
-                </p>
-              )}
               <button
                 type="button"
                 onClick={() => setShowVideoPlayerModal(null)}
@@ -546,28 +1048,139 @@ export default function AssetsPage() {
               <div className="relative w-full aspect-video bg-black rounded-lg overflow-hidden">
                 <video
                   ref={videoPlayerRef}
-                  src={showVideoPlayerModal.url}
-                  poster={showVideoPlayerModal.thumbnailUrl}
+                  src={showVideoPlayerModal.url || undefined}
+                  poster={showVideoPlayerModal.thumbnailUrl || undefined}
                   className="w-full h-full object-contain"
-                  onPlay={() => setIsPlayingVideo(true)}
-                  onPause={() => setIsPlayingVideo(false)}
-                  onEnded={() => setIsPlayingVideo(false)}
                   controls // Add native controls for full functionality within modal
                 />
               </div>
 
               <div className="flex flex-wrap gap-3 mt-4">
-                <a href={showVideoPlayerModal.url} download>
+                <a href={showVideoPlayerModal.url || '#'} download>
                   <Button variant="outline">
                     <Download className="h-4 w-4" />
                     Download Original
                   </Button>
                 </a>
                 <Button
-                  variant="destructive"
+                  variant="danger"
                   onClick={() => {
                     setShowVideoPlayerModal(null); // Close player before showing delete dialog
                     setAssetToDelete(showVideoPlayerModal);
+                  }}
+                >
+                  <Trash2 className="h-4 w-4" />
+                  Delete
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
+      {showImageModal && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm"
+          onClick={() => setShowImageModal(null)}
+        >
+          <Card
+            className="flex max-h-[90vh] w-full max-w-5xl flex-col overflow-hidden border-slate-700/70 bg-slate-900 shadow-2xl"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="relative border-b border-slate-700/50 p-6">
+              <h2 className="text-2xl font-semibold text-white">{showImageModal.title}</h2>
+              <button
+                type="button"
+                onClick={() => setShowImageModal(null)}
+                className="absolute right-4 top-4 rounded-full border border-white/10 bg-slate-800/50 p-2 text-slate-200 transition-colors hover:bg-slate-800 hover:text-white"
+                aria-label="Close image preview"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <CardContent className="flex flex-col items-center justify-center space-y-4 p-6">
+              <div className="relative flex w-full items-center justify-center overflow-hidden rounded-lg bg-slate-950">
+                <img
+                  src={showImageModal.url || ''}
+                  alt={showImageModal.title}
+                  className="max-h-[70vh] w-auto max-w-full object-contain"
+                />
+              </div>
+
+              <div className="flex flex-wrap gap-3">
+                <a href={showImageModal.url || '#'} download>
+                  <Button variant="outline">
+                    <Download className="h-4 w-4" />
+                    Download Image
+                  </Button>
+                </a>
+                <Button
+                  variant="danger"
+                  onClick={() => {
+                    setShowImageModal(null);
+                    setAssetToDelete(showImageModal);
+                  }}
+                >
+                  <Trash2 className="h-4 w-4" />
+                  Delete
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
+      {showAudioPlayerModal && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm"
+          onClick={() => setShowAudioPlayerModal(null)}
+        >
+          <Card
+            className="flex w-full max-w-2xl flex-col overflow-hidden border-slate-700/70 bg-slate-900 shadow-2xl"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="relative border-b border-slate-700/50 p-6">
+              <h2 className="text-2xl font-semibold text-white">{showAudioPlayerModal.title}</h2>
+              <button
+                type="button"
+                onClick={() => setShowAudioPlayerModal(null)}
+                className="absolute right-4 top-4 rounded-full border border-white/10 bg-slate-800/50 p-2 text-slate-200 transition-colors hover:bg-slate-800 hover:text-white"
+                aria-label="Close audio player"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <CardContent className="space-y-6 p-6">
+              <div className="flex items-center gap-4 rounded-2xl border border-slate-800 bg-slate-950 p-5">
+                <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-cyan-500/10 text-cyan-300">
+                  <AudioLines className="h-8 w-8" />
+                </div>
+                <div className="min-w-0">
+                  <p className="truncate text-lg font-semibold text-white">{showAudioPlayerModal.title}</p>
+                  <p className="text-sm text-slate-400">Audio preview</p>
+                </div>
+              </div>
+
+              <audio
+                src={showAudioPlayerModal.url || undefined}
+                controls
+                className="w-full"
+              />
+
+              <div className="flex flex-wrap gap-3">
+                <a href={showAudioPlayerModal.url || '#'} download>
+                  <Button variant="outline">
+                    <Download className="h-4 w-4" />
+                    Download Audio
+                  </Button>
+                </a>
+                <Button
+                  variant="danger"
+                  onClick={() => {
+                    setShowAudioPlayerModal(null);
+                    setAssetToDelete(showAudioPlayerModal);
                   }}
                 >
                   <Trash2 className="h-4 w-4" />
@@ -585,15 +1198,26 @@ export default function AssetsPage() {
         <div>
           <div className="mb-3 inline-flex items-center gap-2 rounded-full border border-violet-500/20 bg-violet-500/10 px-3 py-1 text-xs font-medium uppercase tracking-[0.25em] text-violet-200">
             Your Assets
-            <span className="rounded-full bg-white/10 px-2 py-0.5 tracking-normal text-white">{assets.length}</span>
+            <span className="rounded-full bg-white/10 px-2 py-0.5 tracking-normal text-white">{totalAssets}</span>
           </div>
           <h1 className="mb-2 text-3xl font-bold text-white">Manage your creative assets</h1>
           <p className="max-w-2xl text-slate-400">
-            Upload your images and videos, or generate new ones using AI. All your media in one place.
+            Upload or generate image, video, and audio assets from the new backend endpoints.
           </p>
         </div>
 
         <div className="flex flex-wrap gap-3">
+          <Button
+            variant="outline"
+            onClick={() => {
+              void loadAssets('refresh');
+            }}
+            loading={refreshingAssets}
+            disabled={loadingAssets || refreshingAssets}
+          >
+            <RefreshCw className="h-5 w-5" />
+            Refresh
+          </Button>
           <Button variant="secondary" onClick={() => setShowUploadModal(true)}>
             <Upload className="h-5 w-5" />
             Upload
@@ -614,7 +1238,7 @@ export default function AssetsPage() {
                 <Video className="h-3.5 w-3.5" />
                 Total Assets
               </span>
-              <p className="mt-3 text-2xl font-semibold text-white">{assets.length}</p>
+              <p className="mt-3 text-2xl font-semibold text-white">{totalAssets}</p>
             </div>
             <div className="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-2xl bg-slate-900 text-slate-200">
               <VideoIcon className="h-5 w-5" />
@@ -626,7 +1250,7 @@ export default function AssetsPage() {
             <div className="min-w-0">
               <span className="inline-flex items-center gap-2 rounded-full bg-blue-500/12 px-2.5 py-1 text-[11px] font-medium uppercase tracking-[0.22em] text-blue-200">
                 <ImageIcon className="h-3.5 w-3.5" />
-                Images
+                Images On Page
               </span>
               <p className="mt-3 text-2xl font-semibold text-blue-300">{assets.filter(a => a.type === 'image').length}</p>
             </div>
@@ -640,7 +1264,7 @@ export default function AssetsPage() {
             <div className="min-w-0">
               <span className="inline-flex items-center gap-2 rounded-full bg-emerald-500/12 px-2.5 py-1 text-[11px] font-medium uppercase tracking-[0.22em] text-emerald-200">
                 <VideoIcon className="h-3.5 w-3.5" />
-                Videos
+                Videos On Page
               </span>
               <p className="mt-3 text-2xl font-semibold text-emerald-300">{assets.filter(a => a.type === 'video').length}</p>
             </div>
@@ -652,18 +1276,76 @@ export default function AssetsPage() {
         <Card className="overflow-hidden">
           <CardContent className="flex items-center justify-between gap-4 p-4">
             <div className="min-w-0">
-              <span className="inline-flex items-center gap-2 rounded-full bg-violet-500/12 px-2.5 py-1 text-[11px] font-medium uppercase tracking-[0.22em] text-violet-200">
-                <Sparkles className="h-3.5 w-3.5" />
-                AI Generated
+              <span className="inline-flex items-center gap-2 rounded-full bg-cyan-500/12 px-2.5 py-1 text-[11px] font-medium uppercase tracking-[0.22em] text-cyan-200">
+                <AudioLines className="h-3.5 w-3.5" />
+                Audio On Page
               </span>
-              <p className="mt-3 text-2xl font-semibold text-violet-300">{assets.filter(a => a.source === 'ai_generated').length}</p>
+              <p className="mt-3 text-2xl font-semibold text-cyan-300">{assets.filter((a) => a.type === 'audio').length}</p>
             </div>
-            <div className="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-2xl bg-violet-500/12 text-violet-200">
-              <Sparkles className="h-5 w-5" />
+            <div className="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-2xl bg-cyan-500/12 text-cyan-200">
+              <AudioLines className="h-5 w-5" />
             </div>
           </CardContent>
         </Card>
       </div>
+
+      <Card className="mb-6 overflow-hidden">
+        <CardContent className="p-4">
+          <div className="grid gap-3 lg:grid-cols-[minmax(0,1.8fr)_minmax(0,0.9fr)_minmax(0,0.9fr)_auto]">
+            <div className="relative">
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
+              <Input
+                value={searchInput}
+                onChange={(event) => setSearchInput(event.target.value)}
+                placeholder="Search assets by title"
+                className="pl-10"
+              />
+            </div>
+
+            <div className="relative">
+              <ImageIcon className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
+              <select
+                value={assetTypeFilter}
+                onChange={(event) => setAssetTypeFilter(event.target.value as AssetTypeFilter)}
+                className="block w-full rounded-md border border-slate-700 bg-slate-800 py-2 pl-10 pr-3 text-sm text-white focus:border-violet-500 focus:ring-violet-500"
+              >
+                <option value="all">All types</option>
+                <option value="image">Images</option>
+                <option value="video">Videos</option>
+                <option value="audio">Audio</option>
+              </select>
+            </div>
+
+            <div className="relative">
+              <Sparkles className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
+              <select
+                value={sourceTypeFilter}
+                onChange={(event) => setSourceTypeFilter(event.target.value as AssetSourceFilter)}
+                className="block w-full rounded-md border border-slate-700 bg-slate-800 py-2 pl-10 pr-3 text-sm text-white focus:border-violet-500 focus:ring-violet-500"
+              >
+                <option value="all">All sources</option>
+                <option value="generated">AI Generated</option>
+                <option value="uploaded">Uploaded</option>
+              </select>
+            </div>
+
+            <Button
+              variant="ghost"
+              onClick={() => {
+                setSearchInput('');
+                setDebouncedSearch('');
+                setAssetTypeFilter('all');
+                setSourceTypeFilter('all');
+                setPage(1);
+              }}
+              disabled={!hasActiveFilters}
+            >
+              <X className="h-4 w-4" />
+              Clear
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
 
 
       {/* Main Asset Grid */}
@@ -677,132 +1359,227 @@ export default function AssetsPage() {
             <div className="mb-4 flex h-20 w-20 items-center justify-center rounded-full bg-slate-800">
               <ImageIcon className="h-10 w-10 text-slate-600" />
             </div>
-            <h3 className="mb-2 text-xl font-semibold text-white">No assets yet</h3>
-            <p className="mb-6 text-slate-400">Upload your own images and videos, or generate stunning new ones with AI.</p>
-            <div className="flex gap-3">
-              <Button variant="secondary" onClick={() => setShowUploadModal(true)}>
-                <Upload className="h-5 w-5" />
-                Upload
+            <h3 className="mb-2 text-xl font-semibold text-white">
+              {hasActiveFilters ? 'No assets match these filters' : 'No assets yet'}
+            </h3>
+            <p className="mb-6 text-center text-slate-400">
+              {hasActiveFilters
+                ? 'Try changing your search or filters to see more assets.'
+                : 'Upload or generate image, video, and audio assets to populate your library.'}
+            </p>
+            {hasActiveFilters ? (
+              <Button
+                variant="secondary"
+                onClick={() => {
+                  setSearchInput('');
+                  setDebouncedSearch('');
+                  setAssetTypeFilter('all');
+                  setSourceTypeFilter('all');
+                  setPage(1);
+                }}
+              >
+                Clear Filters
               </Button>
-              <Button onClick={() => setShowAICreateModal(true)}>
-                <Sparkles className="h-5 w-5" />
-                AI Create
-              </Button>
-            </div>
+            ) : (
+              <div className="flex gap-3">
+                <Button variant="secondary" onClick={() => setShowUploadModal(true)}>
+                  <Upload className="h-5 w-5" />
+                  Upload
+                </Button>
+                <Button onClick={() => setShowAICreateModal(true)}>
+                  <Sparkles className="h-5 w-5" />
+                  AI Create
+                </Button>
+              </div>
+            )}
           </CardContent>
         </Card>
       ) : (
-        <div className="grid gap-5 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-          {assets.map((asset) => (
-            <Card
-              key={asset.id}
-              hover
-              className="group relative cursor-pointer overflow-hidden border-slate-700/70 bg-slate-900 shadow-xl transition-all duration-300 ease-in-out hover:scale-[1.02]"
-            >
-              <div
-                className="relative w-full pt-[75%] overflow-hidden" // 4:3 aspect ratio for images, adjusted for videos
-                onClick={() => {
-                  if (asset.type === 'video') {
-                    setShowVideoPlayerModal(asset as VideoAsset);
-                  }
-                  // For images, you might want to open a lightbox or full-size view
-                }}
+        <>
+          <div className="grid gap-5 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+            {assets.map((asset) => (
+              <Card
+                key={asset.id}
+                hover
+                className="group relative cursor-pointer overflow-hidden border-slate-700/70 bg-slate-900 shadow-xl transition-all duration-300 ease-in-out hover:scale-[1.02]"
               >
-                {asset.type === 'image' ? (
-                  <img
-                    src={asset.url}
-                    alt={asset.title}
-                    className="absolute inset-0 h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
-                  />
-                ) : (
-                  <>
+                <div
+                  className="relative w-full pt-[75%] overflow-hidden"
+                  onClick={() => {
+                    if (asset.type === 'video' && asset.url) {
+                      setShowVideoPlayerModal(asset as VideoAsset);
+                    } else if (asset.type === 'image' && asset.url) {
+                      setShowImageModal(asset as ImageAsset);
+                    } else if (asset.type === 'audio' && asset.url) {
+                      setShowAudioPlayerModal(asset as AudioAsset);
+                    }
+                  }}
+                >
+                  {asset.type === 'image' && asset.url ? (
                     <img
-                      src={(asset as VideoAsset).thumbnailUrl || asset.url} // Use thumbnailUrl if available
+                      src={asset.url}
                       alt={asset.title}
                       className="absolute inset-0 h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
                     />
-                    <div className="absolute inset-0 flex items-center justify-center bg-black/40 opacity-0 transition-opacity duration-300 group-hover:opacity-100">
-                      <PlayCircle className="h-16 w-16 text-white/90" />
+                  ) : asset.type === 'video' && (asset.thumbnailUrl || asset.url) ? (
+                    <>
+                      <img
+                        src={asset.thumbnailUrl || asset.url || ''}
+                        alt={asset.title}
+                        className="absolute inset-0 h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
+                      />
+                      <div className="absolute inset-0 flex items-center justify-center bg-black/40 opacity-0 transition-opacity duration-300 group-hover:opacity-100">
+                        <PlayCircle className="h-16 w-16 text-white/90" />
+                      </div>
+                    </>
+                  ) : (
+                    <div className="absolute inset-0 flex items-center justify-center bg-slate-950">
+                      {getAssetIcon(asset.type)}
                     </div>
-                  </>
-                )}
-                <div className="absolute bottom-3 left-3 flex items-center gap-1 rounded-full bg-black/60 px-2 py-0.5 text-xs font-medium text-white">
-                  {asset.type === 'image' ? (
-                    <ImageIcon className="h-3 w-3" />
-                  ) : (
-                    <VideoIcon className="h-3 w-3" />
                   )}
-                  {asset.type === 'image' ? 'Image' : 'Video'}
-                </div>
-                {asset.type === 'video' && (
-                  <div className="absolute top-3 right-3 flex items-center gap-1 rounded-full bg-black/60 px-2 py-0.5 text-xs font-medium text-white">
-                    <Clock className="h-3 w-3" />
-                    {formatDuration((asset as VideoAsset).duration_seconds)}
+                  <div className="absolute bottom-3 left-3 flex items-center gap-1 rounded-full bg-black/60 px-2 py-0.5 text-xs font-medium text-white">
+                    {asset.type === 'image' ? <ImageIcon className="h-3 w-3" /> : asset.type === 'video' ? <VideoIcon className="h-3 w-3" /> : <AudioLines className="h-3 w-3" />}
+                    {getAssetTypeLabel(asset.type)}
                   </div>
-                )}
-              </div>
-
-              <CardContent className="flex flex-col gap-4 p-5">
-                <div>
-                  <h3 className="truncate text-base font-semibold leading-6 text-white" title={asset.title}>
-                    {asset.title}
-                  </h3>
-                  <div className="mt-2 flex flex-wrap gap-2 text-xs">
-                    <span className={`inline-flex rounded-full px-2.5 py-1 text-slate-300 ${asset.source === 'uploaded' ? 'bg-blue-500/12 text-blue-200' : 'bg-violet-500/12 text-violet-200'}`}>
-                      {asset.source === 'uploaded' ? 'Uploaded' : 'AI Generated'}
-                    </span>
-                    <span className="rounded-full bg-slate-900 px-2.5 py-1 text-slate-400">
-                      {formatDateTime(asset.created_at)}
-                    </span>
+                  <div className={`absolute top-3 right-3 inline-flex rounded-full border px-2 py-0.5 text-xs font-medium ${getStatusBadgeClass(asset.status)}`}>
+                    {asset.status}
                   </div>
+                  {asset.status !== 'ready' && (
+                    <div className="absolute inset-0 flex items-center justify-center bg-slate-950/70 text-sm font-medium text-white">
+                      {asset.status === 'processing' ? (
+                        <span className="inline-flex items-center gap-2">
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                          Processing
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-2">
+                          <Clock className="h-4 w-4" />
+                          Unavailable
+                        </span>
+                      )}
+                    </div>
+                  )}
                 </div>
 
-                <div className="mt-auto flex gap-2">
-                  {asset.type === 'video' ? (
-                    <Button
-                      variant="secondary"
-                      size="sm"
-                      className="flex-1"
-                      onClick={(e) => { e.stopPropagation(); setShowVideoPlayerModal(asset as VideoAsset); }}
-                    >
-                      <PlayCircle className="h-4 w-4" />
-                      Preview
-                    </Button>
-                  ) : (
-                    <a href={asset.url} target="_blank" rel="noopener noreferrer" className="flex-1" onClick={(e) => e.stopPropagation()}>
-                      <Button variant="secondary" size="sm" className="w-full">
+                <CardContent className="flex flex-col gap-4 p-5">
+                  <div>
+                    <h3 className="truncate text-base font-semibold leading-6 text-white" title={asset.title}>
+                      {asset.title}
+                    </h3>
+                    <div className="mt-2 flex flex-wrap gap-2 text-xs">
+                      <span className={`inline-flex rounded-full px-2.5 py-1 text-slate-300 ${asset.source === 'uploaded' ? 'bg-blue-500/12 text-blue-200' : 'bg-violet-500/12 text-violet-200'}`}>
+                        {asset.source === 'uploaded' ? 'Uploaded' : 'AI Generated'}
+                      </span>
+                      <span className="rounded-full bg-slate-900 px-2.5 py-1 text-slate-400">
+                        {formatDateTime(asset.created_at)}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="mt-auto grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] items-stretch gap-2">
+                    {asset.type === 'video' ? (
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        className="w-full min-w-0 whitespace-nowrap px-3"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (asset.url) {
+                            setShowVideoPlayerModal(asset as VideoAsset);
+                          }
+                        }}
+                        disabled={!asset.url}
+                      >
+                        <PlayCircle className="h-4 w-4" />
+                        Preview
+                      </Button>
+                    ) : asset.type === 'audio' ? (
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        className="w-full min-w-0 whitespace-nowrap px-3"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (asset.url) {
+                            setShowAudioPlayerModal(asset as AudioAsset);
+                          }
+                        }}
+                        disabled={!asset.url}
+                      >
+                        <AudioLines className="h-4 w-4" />
+                        Open Audio
+                      </Button>
+                    ) : (
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        className="w-full min-w-0 whitespace-nowrap px-3"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (asset.url) {
+                            setShowImageModal(asset as ImageAsset);
+                          }
+                        }}
+                        disabled={!asset.url}
+                      >
                         <ImageIcon className="h-4 w-4" />
                         View Image
                       </Button>
+                    )}
+                    <a
+                      href={asset.url || '#'}
+                      download={asset.title}
+                      className="min-w-0"
+                      onClick={(event) => event.stopPropagation()}
+                    >
+                      <Button variant="outline" className="w-full min-w-0 whitespace-nowrap px-3" size="sm" disabled={!asset.url}>
+                        <Download className="h-4 w-4" />
+                        Download
+                      </Button>
                     </a>
-                  )}
-                  <a
-                    href={asset.url}
-                    download
-                    className="flex-1"
-                    onClick={(event) => event.stopPropagation()}
-                  >
-                    <Button variant="outline" className="w-full" size="sm">
-                      <Download className="h-4 w-4" />
-                      Download
-                    </Button>
-                  </a>
 
-                  <button
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      setAssetToDelete(asset);
-                    }}
-                    className="rounded-lg p-2 text-slate-500 transition-colors hover:bg-slate-800 hover:text-red-400"
-                    aria-label={`Delete ${asset.title}`}
-                  >
-                    <Trash2 className="h-5 w-5" />
-                  </button>
-                </div>
-              </CardContent>
-            </Card>
-          ))}
-        </div>
+                    <button
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        setAssetToDelete(asset);
+                      }}
+                      className="rounded-lg p-2 text-slate-500 transition-colors hover:bg-slate-800 hover:text-red-400"
+                      aria-label={`Delete ${asset.title}`}
+                    >
+                      <Trash2 className="h-5 w-5" />
+                    </button>
+                  </div>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+
+          <div className="mt-6 flex justify-end">
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setPage((currentPage) => Math.max(1, currentPage - 1))}
+                disabled={page <= 1}
+              >
+                <ChevronLeft className="h-4 w-4" />
+                Previous
+              </Button>
+              <span className="rounded-full border border-slate-700 bg-slate-950 px-3 py-1.5 text-sm text-slate-300">
+                Page {page} of {totalPages}
+              </span>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setPage((currentPage) => Math.min(totalPages, currentPage + 1))}
+                disabled={page >= totalPages}
+              >
+                Next
+                <ChevronRight className="h-4 w-4" />
+              </Button>
+            </div>
+          </div>
+        </>
       )}
     </DashboardLayout>
   );

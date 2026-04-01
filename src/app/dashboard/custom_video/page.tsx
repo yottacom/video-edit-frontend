@@ -1,96 +1,77 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import {
   Plus,
   Video,
   Loader2,
   Edit,
   Trash2,
-  Share2,
   Download,
   CalendarDays,
   Film,
   PlayCircle,
   Clock,
   X,
-  Play,
-  Pause,
+  MonitorPlay,
+  Smartphone,
+  RefreshCw,
+  AlertTriangle,
 } from 'lucide-react';
 import { DashboardLayout } from '@/components/layout/DashboardLayout';
 import { Card, CardContent } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
+import { customVideosApi, getApiErrorMessage } from '@/lib/api';
+import { CustomVideo, CustomVideoStatus } from '@/types';
 
-// Dummy Video Data Type
+const CUSTOM_VIDEO_STORAGE_KEY = 'custom_video_recent_ids';
+
 interface VideoProject {
   id: string;
   title: string;
-  thumbnailUrl: string;
-  videoUrl: string; // Added video URL for playback
-  lastEdited: string;
-  duration_seconds: number;
-  status: 'draft' | 'rendered' | 'failed';
+  videoType: 'portrait' | 'landscape';
+  updatedAt: string;
+  createdAt: string;
+  durationSeconds: number;
+  status: CustomVideoStatus;
+  progress: number;
+  outputUrl: string | null;
+  errorMessage: string | null;
 }
 
-// Dummy Data
-const dummyVideos: VideoProject[] = [
-  {
-    id: '12345',
-    title: 'My First Epic Travel Vlog',
-    thumbnailUrl: 'https://via.placeholder.com/400x225?text=Travel+Vlog+Thumbnail',
-    videoUrl: 'https://www.w3schools.com/html/mov_bbb.mp4', // Sample video URL
-    lastEdited: '2023-10-26T10:00:00Z',
-    duration_seconds: 185,
-    status: 'rendered',
-  },
-  {
-    id: '67890',
-    title: 'Product Demo - New Feature Showcase',
-    thumbnailUrl: 'https://via.placeholder.com/400x225?text=Product+Demo+Thumbnail',
-    videoUrl: 'https://www.w3schools.com/html/mov_bbb.mp4', // Sample video URL
-    lastEdited: '2023-10-25T14:30:00Z',
-    duration_seconds: 92,
-    status: 'rendered',
-  },
-  {
-    id: '11223',
-    title: 'Unboxing Gadget Review',
-    thumbnailUrl: 'https://via.placeholder.com/400x225?text=Unboxing+Thumbnail',
-    videoUrl: 'https://www.w3schools.com/html/mov_bbb.mp4', // Sample video URL
-    lastEdited: '2023-10-24T09:15:00Z',
-    duration_seconds: 240,
-    status: 'draft',
-  },
-  {
-    id: '44556',
-    title: 'AI Generated Explainer Video Draft',
-    thumbnailUrl: 'https://via.placeholder.com/400x225?text=Explainer+Video+Thumbnail',
-    videoUrl: 'https://www.w3schools.com/html/mov_bbb.mp4', // Sample video URL
-    lastEdited: '2023-10-23T17:00:00Z',
-    duration_seconds: 120,
-    status: 'draft',
-  },
-  {
-    id: '77889',
-    title: 'Marketing Campaign Ad - Version 2',
-    thumbnailUrl: 'https://via.placeholder.com/400x225?text=Marketing+Ad+Thumbnail',
-    videoUrl: 'https://www.w3schools.com/html/mov_bbb.mp4', // Sample video URL
-    lastEdited: '2023-10-22T11:00:00Z',
-    duration_seconds: 45,
-    status: 'rendered',
-  },
-  {
-    id: '99001',
-    title: 'Failed Render - Try Again',
-    thumbnailUrl: 'https://via.placeholder.com/400x225?text=Failed+Render',
-    videoUrl: 'https://www.w3schools.com/html/mov_bbb.mp4', // Sample video URL
-    lastEdited: '2023-10-21T18:00:00Z',
-    duration_seconds: 60,
-    status: 'failed',
-  },
-];
+function getStoredCustomVideoIds() {
+  if (typeof window === 'undefined') {
+    return [] as string[];
+  }
+
+  try {
+    const parsed = JSON.parse(localStorage.getItem(CUSTOM_VIDEO_STORAGE_KEY) || '[]') as string[];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function rememberCustomVideoId(customVideoId: string) {
+  if (typeof window === 'undefined') {
+    return;
+  }
+
+  const nextIds = [customVideoId, ...getStoredCustomVideoIds().filter((id) => id !== customVideoId)].slice(0, 25);
+  localStorage.setItem(CUSTOM_VIDEO_STORAGE_KEY, JSON.stringify(nextIds));
+}
+
+function removeStoredCustomVideoId(customVideoId: string) {
+  if (typeof window === 'undefined') {
+    return;
+  }
+
+  const nextIds = getStoredCustomVideoIds().filter((id) => id !== customVideoId);
+  localStorage.setItem(CUSTOM_VIDEO_STORAGE_KEY, JSON.stringify(nextIds));
+}
 
 function formatDuration(seconds: number) {
   const minutes = Math.floor(seconds / 60);
@@ -108,83 +89,166 @@ function formatDateTime(value: string) {
   });
 }
 
-export default function VideosPage() {
+function getDurationSeconds(video: CustomVideo) {
+  return Math.max(
+    0,
+    Math.round(
+      video.scenes.reduce((total, scene) => total + ((scene.duration_ms || 0) / 1000), 0)
+    )
+  );
+}
+
+function mapCustomVideoToProject(video: CustomVideo): VideoProject {
+  return {
+    id: video.id,
+    title: video.title || 'Custom Video Draft',
+    videoType: video.video_type,
+    updatedAt: video.updated_at || video.created_at || new Date().toISOString(),
+    createdAt: video.created_at || new Date().toISOString(),
+    durationSeconds: getDurationSeconds(video),
+    status: video.status,
+    progress: video.progress || 0,
+    outputUrl: video.output_url || null,
+    errorMessage: video.error_message || null,
+  };
+}
+
+function getVideoStatusBadge(status: VideoProject['status']) {
+  switch (status) {
+    case 'completed':
+      return 'bg-emerald-500/15 text-emerald-200 border-emerald-400/20';
+    case 'draft':
+      return 'bg-blue-500/15 text-blue-200 border-blue-400/20';
+    case 'finalizing':
+    case 'rendering':
+      return 'bg-violet-500/15 text-violet-200 border-violet-400/20';
+    case 'failed':
+      return 'bg-red-500/15 text-red-200 border-red-400/20';
+    default:
+      return 'bg-slate-700/50 text-slate-200 border-slate-500/20';
+  }
+}
+
+function getVideoStatusLabel(status: VideoProject['status']) {
+  switch (status) {
+    case 'completed':
+      return 'Completed';
+    case 'draft':
+      return 'Draft';
+    case 'finalizing':
+      return 'Finalizing';
+    case 'rendering':
+      return 'Rendering';
+    case 'failed':
+      return 'Failed';
+    default:
+      return status;
+  }
+}
+
+export default function CustomVideoPage() {
+  const router = useRouter();
+  const videoRef = useRef<HTMLVideoElement>(null);
+
   const [videos, setVideos] = useState<VideoProject[]>([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const [showCreateModal, setShowCreateModal] = useState(false);
+  const [selectedVideoToPlay, setSelectedVideoToPlay] = useState<VideoProject | null>(null);
   const [videoToDelete, setVideoToDelete] = useState<VideoProject | null>(null);
   const [deletingVideoId, setDeletingVideoId] = useState<string | null>(null);
-  const [selectedVideoToPlay, setSelectedVideoToPlay] = useState<VideoProject | null>(null);
 
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const [isPlaying, setIsPlaying] = useState(false);
-
-  useEffect(() => {
-    // Simulate API call
-    const fetchVideos = async () => {
+  const loadVideos = useCallback(async (mode: 'initial' | 'refresh' = 'initial') => {
+    if (mode === 'initial') {
       setLoading(true);
-      await new Promise((resolve) => setTimeout(resolve, 1000)); // Simulate network delay
-      setVideos(dummyVideos);
-      setLoading(false);
-    };
+    } else {
+      setRefreshing(true);
+    }
 
-    void fetchVideos();
+    try {
+      const response = await customVideosApi.list(1, 100);
+      const nextVideos = response.items
+        .map(mapCustomVideoToProject)
+        .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+
+      setVideos(nextVideos);
+    } catch (error) {
+      console.error('Failed to load custom videos:', error);
+      alert(getApiErrorMessage(error, 'Failed to load custom videos.'));
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
   }, []);
 
   useEffect(() => {
-    // Handle body overflow when modal is open
+    void loadVideos();
+  }, [loadVideos]);
+
+  useEffect(() => {
     const previousOverflow = document.body.style.overflow;
-    if (selectedVideoToPlay) {
+    if (selectedVideoToPlay || showCreateModal || videoToDelete) {
       document.body.style.overflow = 'hidden';
-    } else {
-      document.body.style.overflow = previousOverflow;
     }
+
     return () => {
       document.body.style.overflow = previousOverflow;
     };
-  }, [selectedVideoToPlay]);
+  }, [selectedVideoToPlay, showCreateModal, videoToDelete]);
+
+  const stats = useMemo(() => {
+    return {
+      total: videos.length,
+      completed: videos.filter((video) => video.status === 'completed').length,
+      drafts: videos.filter((video) => video.status === 'draft').length,
+      failed: videos.filter((video) => video.status === 'failed').length,
+    };
+  }, [videos]);
+
+  const handleCreateNewVideo = async (ratio: 'landscape' | 'portrait') => {
+    setCreating(true);
+
+    try {
+      const draft = await customVideosApi.start({
+        video_type: ratio,
+        title: 'Custom Video Draft',
+        background_music_mood: 'none',
+      });
+
+      rememberCustomVideoId(draft.id);
+      setShowCreateModal(false);
+      router.push(`/dashboard/custom_video/${draft.id}/create`);
+    } catch (error) {
+      console.error('Failed to start custom video draft:', error);
+      alert(getApiErrorMessage(error, 'Failed to start custom video draft.'));
+    } finally {
+      setCreating(false);
+    }
+  };
 
   const handleDeleteVideo = async () => {
-    if (!videoToDelete) return;
+    if (!videoToDelete) {
+      return;
+    }
 
     setDeletingVideoId(videoToDelete.id);
+
     try {
-      // Simulate API call for deletion
-      await new Promise((resolve) => setTimeout(resolve, 500));
+      await customVideosApi.delete(videoToDelete.id);
+      removeStoredCustomVideoId(videoToDelete.id);
       setVideos((currentVideos) => currentVideos.filter((video) => video.id !== videoToDelete.id));
 
       if (selectedVideoToPlay?.id === videoToDelete.id) {
         setSelectedVideoToPlay(null);
       }
+
       setVideoToDelete(null);
     } catch (error) {
-      console.error('Failed to delete video:', error);
-      alert('Failed to delete video. Please try again.');
+      console.error('Failed to delete custom video:', error);
+      alert(getApiErrorMessage(error, 'Failed to delete custom video.'));
     } finally {
       setDeletingVideoId(null);
-    }
-  };
-
-  const getVideoStatusBadge = (status: VideoProject['status']) => {
-    switch (status) {
-      case 'rendered':
-        return 'bg-emerald-500/15 text-emerald-200 border-emerald-400/20';
-      case 'draft':
-        return 'bg-blue-500/15 text-blue-200 border-blue-400/20';
-      case 'failed':
-        return 'bg-red-500/15 text-red-200 border-red-400/20';
-      default:
-        return 'bg-slate-700/50 text-slate-200 border-slate-500/20';
-    }
-  };
-
-  const togglePlayPause = () => {
-    if (videoRef.current) {
-      if (isPlaying) {
-        videoRef.current.pause();
-      } else {
-        videoRef.current.play();
-      }
-      setIsPlaying(!isPlaying);
     }
   };
 
@@ -192,10 +256,10 @@ export default function VideosPage() {
     <DashboardLayout>
       <ConfirmDialog
         open={!!videoToDelete}
-        title="Delete video project?"
+        title="Delete custom video?"
         description={
           videoToDelete
-            ? `"${videoToDelete.title}" will be permanently removed from your video library.`
+            ? `"${videoToDelete.title}" will be permanently deleted.`
             : ''
         }
         confirmLabel="Delete Video"
@@ -209,6 +273,72 @@ export default function VideosPage() {
           void handleDeleteVideo();
         }}
       />
+
+      {showCreateModal && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm"
+          onClick={() => {
+            if (!creating) {
+              setShowCreateModal(false);
+            }
+          }}
+        >
+          <Card
+            className="w-full max-w-3xl overflow-hidden border-slate-700/70 bg-slate-900 shadow-2xl"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="relative border-b border-slate-700/50 p-6">
+              <h2 className="text-2xl font-semibold text-white">Create New Video</h2>
+              <p className="mt-2 text-sm text-slate-400">Choose the aspect ratio to start a backend draft.</p>
+              <button
+                type="button"
+                onClick={() => {
+                  if (!creating) {
+                    setShowCreateModal(false);
+                  }
+                }}
+                className="absolute right-4 top-4 rounded-full border border-white/10 bg-slate-800/50 p-2 text-slate-200 transition-colors hover:bg-slate-800 hover:text-white"
+                aria-label="Close create video modal"
+                disabled={creating}
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <CardContent className="grid gap-4 p-6 md:grid-cols-2">
+              <button
+                type="button"
+                onClick={() => {
+                  void handleCreateNewVideo('landscape');
+                }}
+                disabled={creating}
+                className="group rounded-2xl border border-slate-700 bg-slate-950 p-6 text-left transition-all hover:border-violet-500 hover:bg-slate-900 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                <div className="mb-5 flex h-36 items-center justify-center rounded-xl border border-dashed border-slate-600 bg-slate-900">
+                  <MonitorPlay className="h-10 w-10 text-slate-300 transition-colors group-hover:text-violet-300" />
+                </div>
+                <h3 className="text-xl font-semibold text-white">Landscape</h3>
+                <p className="mt-2 text-sm text-slate-400">Best for desktop and 16:9 videos.</p>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  void handleCreateNewVideo('portrait');
+                }}
+                disabled={creating}
+                className="group rounded-2xl border border-slate-700 bg-slate-950 p-6 text-left transition-all hover:border-violet-500 hover:bg-slate-900 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                <div className="mb-5 flex h-36 items-center justify-center rounded-xl border border-dashed border-slate-600 bg-slate-900">
+                  <Smartphone className="h-10 w-10 text-slate-300 transition-colors group-hover:text-violet-300" />
+                </div>
+                <h3 className="text-xl font-semibold text-white">Portrait</h3>
+                <p className="mt-2 text-sm text-slate-400">Best for shorts, reels, and 9:16 exports.</p>
+              </button>
+            </CardContent>
+          </Card>
+        </div>
+      )}
 
       {selectedVideoToPlay && (
         <div
@@ -231,62 +361,67 @@ export default function VideosPage() {
               </button>
             </div>
 
-            <CardContent className="flex flex-col items-center justify-center space-y-4 p-6">
-              <div className="relative w-full aspect-video bg-black rounded-lg overflow-hidden">
-                <video
-                  ref={videoRef}
-                  src={selectedVideoToPlay.videoUrl}
-                  poster={selectedVideoToPlay.thumbnailUrl}
-                  className="w-full h-full object-contain"
-                  onPlay={() => setIsPlaying(true)}
-                  onPause={() => setIsPlaying(false)}
-                  onEnded={() => setIsPlaying(false)}
-                />
-                {!isPlaying && (
-                  <div className="absolute inset-0 flex items-center justify-center bg-black/30">
-                    <button
-                      onClick={togglePlayPause}
-                      className="flex h-20 w-20 items-center justify-center rounded-full bg-white/30 text-white backdrop-blur-sm transition-transform hover:scale-105"
-                      aria-label="Play video"
-                    >
-                      <Play className="ml-1 h-10 w-10" />
-                    </button>
-                  </div>
-                )}
-                {isPlaying && (
-                  <div className="absolute bottom-4 right-4 z-10">
-                    <button
-                      onClick={togglePlayPause}
-                      className="flex h-12 w-12 items-center justify-center rounded-full bg-white/30 text-white backdrop-blur-sm transition-transform hover:scale-105"
-                      aria-label="Pause video"
-                    >
-                      <Pause className="h-6 w-6" />
-                    </button>
-                  </div>
-                )}
+            <CardContent className="space-y-5 p-6">
+              {selectedVideoToPlay.outputUrl ? (
+                <div className="relative aspect-video overflow-hidden rounded-lg bg-black">
+                  <video
+                    ref={videoRef}
+                    src={selectedVideoToPlay.outputUrl || undefined}
+                    className="h-full w-full object-contain"
+                    controls
+                    autoPlay
+                  />
+                </div>
+              ) : (
+                <div className="flex aspect-video items-center justify-center rounded-lg border border-slate-800 bg-slate-950 text-slate-400">
+                  Final video preview is not available yet.
+                </div>
+              )}
+
+              <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                <div className="rounded-xl border border-slate-800 bg-slate-950/80 p-4">
+                  <p className="text-xs uppercase tracking-[0.18em] text-slate-500">Status</p>
+                  <p className="mt-2 text-sm font-medium text-white">{getVideoStatusLabel(selectedVideoToPlay.status)}</p>
+                </div>
+                <div className="rounded-xl border border-slate-800 bg-slate-950/80 p-4">
+                  <p className="text-xs uppercase tracking-[0.18em] text-slate-500">Aspect Ratio</p>
+                  <p className="mt-2 text-sm font-medium capitalize text-white">{selectedVideoToPlay.videoType}</p>
+                </div>
+                <div className="rounded-xl border border-slate-800 bg-slate-950/80 p-4">
+                  <p className="text-xs uppercase tracking-[0.18em] text-slate-500">Duration</p>
+                  <p className="mt-2 text-sm font-medium text-white">{formatDuration(selectedVideoToPlay.durationSeconds)}</p>
+                </div>
+                <div className="rounded-xl border border-slate-800 bg-slate-950/80 p-4">
+                  <p className="text-xs uppercase tracking-[0.18em] text-slate-500">Updated</p>
+                  <p className="mt-2 text-sm font-medium text-white">{formatDateTime(selectedVideoToPlay.updatedAt)}</p>
+                </div>
               </div>
 
-              <div className="flex flex-wrap gap-3 mt-4">
-                <Button onClick={togglePlayPause}>
-                  {isPlaying ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
-                  {isPlaying ? 'Pause' : 'Play'}
-                </Button>
-                <a href={selectedVideoToPlay.videoUrl} download>
-                  <Button variant="outline">
+              {selectedVideoToPlay.errorMessage && (
+                <div className="rounded-xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-200">
+                  {selectedVideoToPlay.errorMessage}
+                </div>
+              )}
+
+              <div className="flex flex-wrap gap-3">
+                {selectedVideoToPlay.status !== 'completed' && (
+                  <Link href={`/dashboard/custom_video/${selectedVideoToPlay.id}/create`}>
+                    <Button variant="secondary">
+                      <Edit className="h-4 w-4" />
+                      Open Editor
+                    </Button>
+                  </Link>
+                )}
+                <a href={selectedVideoToPlay.outputUrl || '#'} download={selectedVideoToPlay.title}>
+                  <Button variant="outline" disabled={!selectedVideoToPlay.outputUrl}>
                     <Download className="h-4 w-4" />
-                    Download Original
+                    Download
                   </Button>
                 </a>
-                <Link href={`http://localhost:3000/dashboard/custom_video/${selectedVideoToPlay.id}/edit`} passHref>
-                  <Button variant="secondary">
-                    <Edit className="h-4 w-4" />
-                    Edit Project
-                  </Button>
-                </Link>
                 <Button
-                  variant="destructive"
+                  variant="danger"
                   onClick={() => {
-                    setSelectedVideoToPlay(null); // Close player before showing delete dialog
+                    setSelectedVideoToPlay(null);
                     setVideoToDelete(selectedVideoToPlay);
                   }}
                 >
@@ -303,24 +438,34 @@ export default function VideosPage() {
         <div>
           <div className="mb-3 inline-flex items-center gap-2 rounded-full border border-violet-500/20 bg-violet-500/10 px-3 py-1 text-xs font-medium uppercase tracking-[0.25em] text-violet-200">
             Video Projects
-            <span className="rounded-full bg-white/10 px-2 py-0.5 tracking-normal text-white">{videos.length}</span>
+            <span className="rounded-full bg-white/10 px-2 py-0.5 tracking-normal text-white">{stats.total}</span>
           </div>
-          <h1 className="mb-2 text-3xl font-bold text-white">Your created video projects</h1>
+          <h1 className="mb-2 text-3xl font-bold text-white">Your custom video drafts</h1>
           <p className="max-w-2xl text-slate-400">
-            Manage your video projects created with our editor. Preview, edit, download, or share your masterpieces.
+            Start a new video, continue editing drafts, and monitor completed renders from the custom videos API.
           </p>
         </div>
 
-        <Link href="http://localhost:3000/dashboard/custom_video/123123/create" passHref>
-          <Button>
+        <div className="flex flex-wrap gap-3">
+          <Button
+            variant="outline"
+            onClick={() => {
+              void loadVideos('refresh');
+            }}
+            loading={refreshing}
+            disabled={loading || refreshing}
+          >
+            <RefreshCw className="h-5 w-5" />
+            Refresh
+          </Button>
+          <Button onClick={() => setShowCreateModal(true)}>
             <Plus className="h-5 w-5" />
             Create New Video
           </Button>
-        </Link>
+        </div>
       </div>
 
       <div className="mb-8 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        {/* Placeholder cards for quick stats */}
         <Card className="overflow-hidden">
           <CardContent className="flex items-center justify-between gap-4 p-4">
             <div className="min-w-0">
@@ -328,7 +473,7 @@ export default function VideosPage() {
                 <Film className="h-3.5 w-3.5" />
                 Total Projects
               </span>
-              <p className="mt-3 text-2xl font-semibold text-white">{videos.length}</p>
+              <p className="mt-3 text-2xl font-semibold text-white">{stats.total}</p>
             </div>
             <div className="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-2xl bg-slate-900 text-slate-200">
               <Video className="h-5 w-5" />
@@ -341,11 +486,9 @@ export default function VideosPage() {
             <div className="min-w-0">
               <span className="inline-flex items-center gap-2 rounded-full bg-emerald-500/12 px-2.5 py-1 text-[11px] font-medium uppercase tracking-[0.22em] text-emerald-200">
                 <PlayCircle className="h-3.5 w-3.5" />
-                Rendered Videos
+                Completed
               </span>
-              <p className="mt-3 text-2xl font-semibold text-emerald-300">
-                {videos.filter((v) => v.status === 'rendered').length}
-              </p>
+              <p className="mt-3 text-2xl font-semibold text-emerald-300">{stats.completed}</p>
             </div>
             <div className="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-2xl bg-emerald-500/12 text-emerald-200">
               <PlayCircle className="h-5 w-5" />
@@ -360,9 +503,7 @@ export default function VideosPage() {
                 <Edit className="h-3.5 w-3.5" />
                 Drafts
               </span>
-              <p className="mt-3 text-2xl font-semibold text-blue-300">
-                {videos.filter((v) => v.status === 'draft').length}
-              </p>
+              <p className="mt-3 text-2xl font-semibold text-blue-300">{stats.drafts}</p>
             </div>
             <div className="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-2xl bg-blue-500/12 text-blue-200">
               <Edit className="h-5 w-5" />
@@ -374,15 +515,13 @@ export default function VideosPage() {
           <CardContent className="flex items-center justify-between gap-4 p-4">
             <div className="min-w-0">
               <span className="inline-flex items-center gap-2 rounded-full bg-red-500/12 px-2.5 py-1 text-[11px] font-medium uppercase tracking-[0.22em] text-red-200">
-                <Trash2 className="h-3.5 w-3.5" />
-                Failed Renders
+                <AlertTriangle className="h-3.5 w-3.5" />
+                Failed
               </span>
-              <p className="mt-3 text-2xl font-semibold text-red-300">
-                {videos.filter((v) => v.status === 'failed').length}
-              </p>
+              <p className="mt-3 text-2xl font-semibold text-red-300">{stats.failed}</p>
             </div>
             <div className="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-2xl bg-red-500/12 text-red-200">
-              <Trash2 className="h-5 w-5" />
+              <AlertTriangle className="h-5 w-5" />
             </div>
           </CardContent>
         </Card>
@@ -398,14 +537,14 @@ export default function VideosPage() {
             <div className="mb-4 flex h-20 w-20 items-center justify-center rounded-full bg-slate-800">
               <Video className="h-10 w-10 text-slate-600" />
             </div>
-            <h3 className="mb-2 text-xl font-semibold text-white">No video projects yet</h3>
-            <p className="mb-6 text-slate-400">Start creating amazing videos with our editor!</p>
-            <Link href="http://localhost:3000/dashboard/custom_video/123123/create" passHref>
-              <Button>
-                <Plus className="h-5 w-5" />
-                Create New Video
-              </Button>
-            </Link>
+            <h3 className="mb-2 text-xl font-semibold text-white">No custom video drafts yet</h3>
+            <p className="mb-6 max-w-xl text-center text-slate-400">
+              Start your first draft from this page. Once created, it will appear here and can be reopened through the custom videos API.
+            </p>
+            <Button onClick={() => setShowCreateModal(true)}>
+              <Plus className="h-5 w-5" />
+              Create New Video
+            </Button>
           </CardContent>
         </Card>
       ) : (
@@ -414,30 +553,41 @@ export default function VideosPage() {
             <Card
               key={video.id}
               hover
-              className="group relative cursor-pointer overflow-hidden border-slate-700/70 bg-slate-900 shadow-xl transition-all duration-300 ease-in-out hover:scale-[1.02]"
+              className="group relative overflow-hidden border-slate-700/70 bg-slate-900 shadow-xl transition-all duration-300 ease-in-out hover:scale-[1.02]"
             >
               <div
-                className="relative w-full overflow-hidden pt-[56.25%]" // 16:9 Aspect Ratio
-                onClick={(e) => {
-                  e.stopPropagation(); // Prevent card click from opening edit page
-                  setSelectedVideoToPlay(video);
+                className="relative overflow-hidden bg-slate-950"
+                onClick={() => {
+                  if (video.outputUrl) {
+                    setSelectedVideoToPlay(video);
+                  }
                 }}
               >
-                <img
-                  src={video.thumbnailUrl}
-                  alt={video.title}
-                  className="absolute inset-0 h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
-                />
-                <div className="absolute inset-0 flex items-center justify-center bg-black/40 opacity-0 transition-opacity duration-300 group-hover:opacity-100">
-                  <PlayCircle className="h-16 w-16 text-white/90" />
+                <div className="flex aspect-[16/9] items-center justify-center bg-[radial-gradient(circle_at_top,_rgba(139,92,246,0.25),_transparent_55%),linear-gradient(180deg,rgba(15,23,42,0.9),rgba(2,6,23,1))]">
+                  {video.videoType === 'landscape' ? (
+                    <div className="flex h-24 w-40 items-center justify-center rounded-xl border border-dashed border-slate-600 bg-slate-900/70">
+                      <MonitorPlay className="h-10 w-10 text-slate-300" />
+                    </div>
+                  ) : (
+                    <div className="flex h-32 w-20 items-center justify-center rounded-xl border border-dashed border-slate-600 bg-slate-900/70">
+                      <Smartphone className="h-10 w-10 text-slate-300" />
+                    </div>
+                  )}
                 </div>
+
+                {video.outputUrl && (
+                  <div className="absolute inset-0 flex items-center justify-center bg-black/35 opacity-0 transition-opacity duration-300 group-hover:opacity-100">
+                    <PlayCircle className="h-16 w-16 text-white/90" />
+                  </div>
+                )}
+
                 <div className="absolute bottom-3 left-3 right-3 flex items-center justify-between text-white">
                   <span className="inline-flex items-center gap-1 rounded-full bg-black/60 px-2 py-0.5 text-xs font-medium">
                     <Clock className="h-3 w-3" />
-                    {formatDuration(video.duration_seconds)}
+                    {formatDuration(video.durationSeconds)}
                   </span>
                   <span className={`inline-flex rounded-full border px-2 py-0.5 text-xs font-medium ${getVideoStatusBadge(video.status)}`}>
-                    {video.status === 'rendered' ? 'Rendered' : video.status === 'draft' ? 'Draft' : 'Failed'}
+                    {getVideoStatusLabel(video.status)}
                   </span>
                 </div>
               </div>
@@ -449,25 +599,46 @@ export default function VideosPage() {
                   </h3>
                   <div className="mt-2 flex items-center gap-2 text-xs text-slate-400">
                     <CalendarDays className="h-3.5 w-3.5" />
-                    <span>Last edited: {formatDateTime(video.lastEdited)}</span>
+                    <span>Updated: {formatDateTime(video.updatedAt)}</span>
                   </div>
+                  {video.status === 'rendering' && (
+                    <p className="mt-2 text-xs text-violet-300">Render progress: {video.progress}%</p>
+                  )}
+                  {video.status === 'finalizing' && (
+                    <p className="mt-2 text-xs text-violet-300">Finalizing: {video.progress}%</p>
+                  )}
+                  {video.errorMessage && (
+                    <p className="mt-2 line-clamp-2 text-xs text-red-300">{video.errorMessage}</p>
+                  )}
                 </div>
 
-                <div className="mt-auto flex gap-2">
-                  <Link href={`http://localhost:3000/dashboard/custom_video/${video.id}/edit`} passHref className="flex-1">
-                    <Button variant="secondary" size="sm" className="w-full">
-                      <Edit className="h-4 w-4" />
-                      Edit
+                <div className="mt-auto grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] gap-2">
+                  {video.status === 'completed' ? (
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      className="w-full min-w-0 whitespace-nowrap"
+                      onClick={() => setSelectedVideoToPlay(video)}
+                    >
+                      <PlayCircle className="h-4 w-4" />
+                      Open
                     </Button>
-                  </Link>
+                  ) : (
+                    <Link href={`/dashboard/custom_video/${video.id}/create`} className="min-w-0">
+                      <Button variant="secondary" size="sm" className="w-full min-w-0 whitespace-nowrap">
+                        <Edit className="h-4 w-4" />
+                        {video.status === 'draft' ? 'Continue' : 'Open'}
+                      </Button>
+                    </Link>
+                  )}
 
                   <a
-                    href={video.videoUrl}
-                    download
-                    className="flex-1"
+                    href={video.outputUrl || '#'}
+                    download={video.title}
+                    className="min-w-0"
                     onClick={(event) => event.stopPropagation()}
                   >
-                    <Button variant="outline" className="w-full" size="sm">
+                    <Button variant="outline" className="w-full min-w-0 whitespace-nowrap" size="sm" disabled={!video.outputUrl}>
                       <Download className="h-4 w-4" />
                       Download
                     </Button>

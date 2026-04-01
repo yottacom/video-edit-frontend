@@ -74,7 +74,7 @@ function ApiCallItem({ call }: { call: ApiCall }) {
         </span>
         
         <span className="flex-1 text-sm text-slate-300 truncate font-mono">
-          {call.url.replace(process.env.NEXT_PUBLIC_API_URL || 'https://video-edit.yt1.co', '')}
+          {call.url.replace(process.env.NEXT_PUBLIC_API_URL || 'https://7144-81-245-96-223.ngrok-free.app', '')}
         </span>
         
         <span className={`text-sm font-medium ${statusColor}`}>
