@@ -1111,7 +1111,7 @@ export default function CreateVideoPage() {
   const [refreshingBackgroundTracks, setRefreshingBackgroundTracks] = useState(false);
   const [playingBackgroundTrackId, setPlayingBackgroundTrackId] = useState<string | null>(null);
   const [selectedBackgroundTrack, setSelectedBackgroundTrack] = useState<MusicTrack | null>(null);
-
+const [hasLoadedBackgroundTracksOnce, setHasLoadedBackgroundTracksOnce] = useState(false);
   // Modals State
   const [showAssetPicker, setShowAssetPicker] = useState(false);
   const [currentPickerTarget, setCurrentPickerTarget] = useState<{ sceneId?: string; rowType: 'primary' | 'secondary' | 'narration' | 'globalBg'; secondaryOverlapIndex?: number; } | null>(null);
@@ -1548,24 +1548,26 @@ export default function CreateVideoPage() {
     }
   }, [buildBulkScenePayloads, customVideoId, refreshScenesFromVideo, scenes]);
 
-  const loadBackgroundTracks = useCallback(async (mode: 'initial' | 'refresh' = 'initial') => {
-    if (mode === 'initial') {
-      setLoadingBackgroundTracks(true);
-    } else {
-      setRefreshingBackgroundTracks(true);
-    }
+    const loadBackgroundTracks = useCallback(async (mode: 'initial' | 'refresh' = 'initial') => {
+      if (mode === 'initial') {
+        setLoadingBackgroundTracks(true);
+      } else {
+        setRefreshingBackgroundTracks(true);
+      }
 
-    try {
-      const data = await musicTracksApi.list();
-      setBackgroundTracks(data.items || []);
-    } catch (error) {
-      console.error('Failed to load background music tracks:', error);
-      alert(getApiErrorMessage(error, 'Failed to load background music tracks.'));
-    } finally {
-      setLoadingBackgroundTracks(false);
-      setRefreshingBackgroundTracks(false);
-    }
-  }, []);
+      try {
+        const data = await musicTracksApi.list();
+        setBackgroundTracks(data.items || []);
+        setHasLoadedBackgroundTracksOnce(true);
+      } catch (error) {
+        console.error('Failed to load background music tracks:', error);
+        alert(getApiErrorMessage(error, 'Failed to load background music tracks.'));
+        setHasLoadedBackgroundTracksOnce(true);
+      } finally {
+        setLoadingBackgroundTracks(false);
+        setRefreshingBackgroundTracks(false);
+      }
+    }, []);
 
   const toggleBackgroundTrackPlay = useCallback(async (track: MusicTrack) => {
     if (playingBackgroundTrackId === track.id) {
@@ -1686,8 +1688,7 @@ export default function CreateVideoPage() {
     setPickerSearchInput('');
     setDebouncedPickerSearch('');
     setPickerSourceTypeFilter('all');
-    setPickerAssetTypeFilter(allowedTypes && allowedTypes.length === 1 ? allowedTypes[0] : 'all');
-    setPickerAiContentType(allowedTypes && allowedTypes.length > 0 ? allowedTypes[0] : 'image');
+    setPickerAssetTypeFilter(allowedTypes && allowedTypes.length > 0 ? allowedTypes[0] : 'all');
     setPickerPage(1);
     resetPickerUploadState();
   }, [resetPickerUploadState]);
@@ -1889,13 +1890,13 @@ export default function CreateVideoPage() {
     void loadLibraryAssets();
   }, []);
 
-  useEffect(() => {
-    if (currentStep !== 2 || backgroundTracks.length > 0 || loadingBackgroundTracks) {
-      return;
-    }
+ useEffect(() => {
+  if (currentStep !== 2 || loadingBackgroundTracks || hasLoadedBackgroundTracksOnce) {
+    return;
+  }
 
-    void loadBackgroundTracks();
-  }, [backgroundTracks.length, currentStep, loadBackgroundTracks, loadingBackgroundTracks]);
+  void loadBackgroundTracks();
+}, [currentStep, loadBackgroundTracks, loadingBackgroundTracks, hasLoadedBackgroundTracksOnce]);
 
   useEffect(() => {
     return () => {
