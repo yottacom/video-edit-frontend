@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import Link from 'next/link';
-import { useParams } from 'next/navigation';
+import { useParams, usePathname } from 'next/navigation';
 import {
   Plus,
   Trash2,
@@ -942,7 +942,9 @@ type DragState =
 // --- Main Component ---
 export default function CreateVideoPage() {
   const params = useParams<{ id: string }>();
+  const pathname = usePathname();
   const routeId = Array.isArray(params.id) ? params.id[0] : params.id;
+  const isEditMode = pathname?.endsWith('/edit') ?? false;
   
   // Overall Wizard State
   const [currentStep, setCurrentStep] = useState<1 | 2 | 3 | 4>(1);
@@ -1852,7 +1854,11 @@ export default function CreateVideoPage() {
           return;
         }
 
-        setCurrentStep(draft.status === 'draft' ? 1 : 4);
+        const shouldOpenEditor =
+          isEditMode &&
+          (draft.status === 'draft' || draft.status === 'completed' || draft.status === 'failed');
+
+        setCurrentStep(shouldOpenEditor || draft.status === 'draft' ? 1 : 4);
       } catch (error) {
         if (cancelled) {
           return;
@@ -1871,7 +1877,7 @@ export default function CreateVideoPage() {
     return () => {
       cancelled = true;
     };
-  }, [customVideoId, loadingLibraryAssets, refreshScenesFromVideo, routeId]);
+  }, [customVideoId, isEditMode, loadingLibraryAssets, refreshScenesFromVideo, routeId]);
 
   useEffect(() => {
     if (!customVideoId || (customVideoStatus !== 'finalizing' && customVideoStatus !== 'rendering')) {
@@ -3019,10 +3025,11 @@ export default function CreateVideoPage() {
               <Button
                 onClick={() => { void handleCreateVideo(); }}
                 loading={finalizingVideo}
-                disabled={customVideoStatus !== 'draft' || finalizingVideo || syncingScenes}
+                disabled={finalizingVideo || syncingScenes || isRenderInProgress}
                 className="bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 border-none shadow-lg shadow-violet-500/25"
               >
-                <Sparkles className="w-4 h-4 mr-2" /> Start Video Generation
+                <Sparkles className="w-4 h-4 mr-2" />
+                {isEditMode ? 'Generate Updated Video' : 'Start Video Generation'}
               </Button>
             </div>
           </div>
@@ -3169,6 +3176,11 @@ export default function CreateVideoPage() {
                   <Link href="/dashboard/custom_video">
                     <Button variant="outline">Go to All Videos</Button>
                   </Link>
+                  {customVideoStatus === 'completed' && (
+                    <Link href={`/dashboard/custom_video/${customVideoId}/edit`}>
+                      <Button variant="secondary">Edit Video</Button>
+                    </Link>
+                  )}
                   {customVideoStatus === 'completed' && renderOutputUrl && (
                     <Button onClick={() => setShowFinalVideoModal(true)}>Open Final Video</Button>
                   )}

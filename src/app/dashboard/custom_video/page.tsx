@@ -404,14 +404,18 @@ export default function CustomVideoPage() {
               )}
 
               <div className="flex flex-wrap gap-3">
-                {selectedVideoToPlay.status !== 'completed' && (
-                  <Link href={`/dashboard/custom_video/${selectedVideoToPlay.id}/create`}>
-                    <Button variant="secondary">
-                      <Edit className="h-4 w-4" />
-                      Open Editor
-                    </Button>
-                  </Link>
-                )}
+                <Link
+                  href={
+                    selectedVideoToPlay.status === 'completed'
+                      ? `/dashboard/custom_video/${selectedVideoToPlay.id}/edit`
+                      : `/dashboard/custom_video/${selectedVideoToPlay.id}/create`
+                  }
+                >
+                  <Button variant="secondary">
+                    <Edit className="h-4 w-4" />
+                    {selectedVideoToPlay.status === 'completed' ? 'Edit Video' : 'Open Editor'}
+                  </Button>
+                </Link>
                 <a href={selectedVideoToPlay.outputUrl || '#'} download={selectedVideoToPlay.title}>
                   <Button variant="outline" disabled={!selectedVideoToPlay.outputUrl}>
                     <Download className="h-4 w-4" />
@@ -612,20 +616,28 @@ export default function CustomVideoPage() {
                   )}
                 </div>
 
-                <div className="mt-auto grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] gap-2">
+                <div className="mt-auto flex flex-wrap gap-2">
                   {video.status === 'completed' ? (
-                    <Button
-                      variant="secondary"
-                      size="sm"
-                      className="w-full min-w-0 whitespace-nowrap"
-                      onClick={() => setSelectedVideoToPlay(video)}
-                    >
-                      <PlayCircle className="h-4 w-4" />
-                      Open
-                    </Button>
+                    <>
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        className="min-w-0 whitespace-nowrap"
+                        onClick={() => setSelectedVideoToPlay(video)}
+                      >
+                        <PlayCircle className="h-4 w-4" />
+                        Open
+                      </Button>
+                      <Link href={`/dashboard/custom_video/${video.id}/edit`} className="min-w-0">
+                        <Button size="sm" className="min-w-0 whitespace-nowrap">
+                          <Edit className="h-4 w-4" />
+                          Edit
+                        </Button>
+                      </Link>
+                    </>
                   ) : (
                     <Link href={`/dashboard/custom_video/${video.id}/create`} className="min-w-0">
-                      <Button variant="secondary" size="sm" className="w-full min-w-0 whitespace-nowrap">
+                      <Button variant="secondary" size="sm" className="min-w-0 whitespace-nowrap">
                         <Edit className="h-4 w-4" />
                         {video.status === 'draft' ? 'Continue' : 'Open'}
                       </Button>
@@ -638,7 +650,7 @@ export default function CustomVideoPage() {
                     className="min-w-0"
                     onClick={(event) => event.stopPropagation()}
                   >
-                    <Button variant="outline" className="w-full min-w-0 whitespace-nowrap" size="sm" disabled={!video.outputUrl}>
+                    <Button variant="outline" className="min-w-0 whitespace-nowrap" size="sm" disabled={!video.outputUrl}>
                       <Download className="h-4 w-4" />
                       Download
                     </Button>
