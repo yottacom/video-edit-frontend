@@ -246,13 +246,18 @@ export interface ProjectScene extends ProjectBrollSceneInput {
   updated_at: string;
 }
 
+export interface ProjectShortSegment extends Record<string, unknown> {
+  start_ms: number;
+  end_ms: number;
+}
+
 export interface ProjectShort {
   id: string;
   title: string;
   order: number;
   status: ProjectStatus;
   progress: number;
-  segments: Record<string, unknown>[];
+  segments: ProjectShortSegment[];
   total_duration_ms: number | null;
   output_url: string | null;
   thumbnail_url: string | null;
@@ -294,7 +299,7 @@ export interface ProjectMainEditPayload {
 
 export interface ProjectShortEditPayload {
   title?: string;
-  segments?: Record<string, unknown>[];
+  segments?: ProjectShortSegment[];
   total_duration_ms?: number;
   subtitle_style?: string;
   subtitle_config_override?: Record<string, unknown> | null;

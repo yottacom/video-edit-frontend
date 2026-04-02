@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useEffectEvent, useRef, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { 
-  ArrowLeft, Download, ExternalLink, AudioLines,
+  ArrowLeft, Download, AudioLines,
   Loader2, CheckCircle, XCircle, Clock, Sparkles,
   Video, Music, Type, Scissors, RefreshCw, Tag, Play, X, Pencil
 } from 'lucide-react';
@@ -161,6 +161,29 @@ export default function ProjectDetailPage() {
     }
   };
 
+  const handleDownload = useCallback(async (url: string, filename: string) => {
+    try {
+      const response = await fetch(url);
+
+      if (!response.ok) {
+        throw new Error(`Download failed with status ${response.status}`);
+      }
+
+      const blob = await response.blob();
+      const objectUrl = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = objectUrl;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(objectUrl);
+    } catch (error) {
+      console.error('Failed to download file:', error);
+      window.open(url, '_blank', 'noopener,noreferrer');
+    }
+  }, []);
+
   if (loading || !project) {
     return (
       <DashboardLayout>
@@ -228,12 +251,18 @@ export default function ProjectDetailPage() {
                   <Pencil className="h-4 w-4" />
                   Edit Short
                 </Button>
-                <a href={selectedShort.output_url} download>
-                  <Button size="sm">
-                    <Download className="h-4 w-4" />
-                    Download
-                  </Button>
-                </a>
+                <Button
+                  size="sm"
+                  onClick={() =>
+                    void handleDownload(
+                      selectedShort.output_url!,
+                      `${selectedShort.title || `clip-${selectedShort.order + 1}`}.mp4`
+                    )
+                  }
+                >
+                  <Download className="h-4 w-4" />
+                  Download
+                </Button>
                 <Button variant="ghost" size="sm" onClick={() => setSelectedShort(null)}>
                   <X className="w-4 h-4" />
                   Close
@@ -282,20 +311,10 @@ export default function ProjectDetailPage() {
             </Button>
           )}
           {project.status === 'completed' && project.output_url && (
-            <>
-              <a href={project.output_url} target="_blank" rel="noopener noreferrer">
-                <Button variant="secondary">
-                  <ExternalLink className="w-5 h-5" />
-                  Open
-                </Button>
-              </a>
-              <a href={project.output_url} download>
-                <Button>
-                  <Download className="w-5 h-5" />
-                  Download
-                </Button>
-              </a>
-            </>
+            <Button onClick={() => void handleDownload(project.output_url!, `${project.title || 'project-video'}.mp4`)}>
+              <Download className="w-5 h-5" />
+              Download
+            </Button>
           )}
         </div>
       </div>
@@ -422,6 +441,7 @@ export default function ProjectDetailPage() {
                   {projectShorts.map((short) => {
                     const shortStatus = statusConfig[short.status] || statusConfig.draft;
                     const ShortStatusIcon = shortStatus.icon;
+                    const isShortProcessing = isProcessingStatus(short.status);
 
                     return (
                       <Card key={short.id} className="overflow-hidden border-slate-700/60 bg-slate-950/30">
@@ -454,9 +474,14 @@ export default function ProjectDetailPage() {
                             <h4 className="truncate font-semibold text-white">{short.title}</h4>
                             <div className="mt-2 flex flex-wrap gap-2">
                               <span className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs ${shortStatus.bgColor} ${shortStatus.color}`}>
-                                <ShortStatusIcon className="h-3.5 w-3.5" />
+                                <ShortStatusIcon className={`h-3.5 w-3.5 ${isShortProcessing ? 'animate-spin' : ''}`} />
                                 {shortStatus.label}
                               </span>
+                              {isShortProcessing && typeof short.progress === 'number' && (
+                                <span className="rounded-full bg-cyan-500/15 px-2.5 py-1 text-xs text-cyan-200">
+                                  {short.progress}% complete
+                                </span>
+                              )}
                               <span className="rounded-full bg-slate-800 px-2.5 py-1 text-xs text-slate-300">
                                 Clip {short.order + 1}
                               </span>

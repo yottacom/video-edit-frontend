@@ -1,4 +1,4 @@
-import { EditProject, ProjectBrollSceneInput, ProjectScene } from '@/types';
+import { EditProject, ProjectBrollSceneInput, ProjectScene, ProjectShortSegment } from '@/types';
 
 export type SubtitleConfigMode = 'default' | 'custom';
 
@@ -289,4 +289,30 @@ export function sanitizeProjectBrollScene(scene: ProjectScene): ProjectBrollScen
 
 export function sanitizeProjectBrollScenes(scenes?: ProjectScene[] | null) {
   return (scenes || []).map(sanitizeProjectBrollScene);
+}
+
+export function sanitizeProjectShortSegment(value: Record<string, unknown>): ProjectShortSegment {
+  const startMs = Math.max(0, getNumberValue(value.start_ms, 0));
+  const endMs = Math.max(startMs, getNumberValue(value.end_ms, startMs));
+
+  return {
+    ...value,
+    start_ms: startMs,
+    end_ms: endMs,
+  };
+}
+
+export function sanitizeProjectShortSegments(segments?: Record<string, unknown>[] | null) {
+  return (segments || []).map(sanitizeProjectShortSegment);
+}
+
+export function getProjectShortTimelineDuration(
+  totalDurationMs: number | null | undefined,
+  segments: ProjectShortSegment[]
+) {
+  const maxSegmentEnd = segments.reduce((currentMax, segment) => {
+    return Math.max(currentMax, segment.end_ms);
+  }, 0);
+
+  return Math.max(1000, totalDurationMs ?? 0, maxSegmentEnd);
 }

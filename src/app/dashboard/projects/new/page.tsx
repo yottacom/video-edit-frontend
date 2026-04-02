@@ -9,10 +9,17 @@ import {
 import { DashboardLayout } from '@/components/layout/DashboardLayout';
 import { InlineVideoPlayer } from '@/components/media/InlineVideoPlayer';
 import { VideoThumbnail } from '@/components/media/VideoThumbnail';
+import { SubtitleConfigEditor } from '@/components/projects/SubtitleConfigEditor';
 import { Card, CardContent } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { sourceVideosApi, musicTracksApi, projectsApi, subtitleStylesApi } from '@/lib/api';
+import {
+  buildProjectSubtitleConfigOverride,
+  DEFAULT_PROJECT_SUBTITLE_CONFIG,
+  ProjectSubtitleConfig,
+  SubtitleConfigMode,
+} from '@/lib/project-editing';
 import { SourceVideo, MusicTrack, SubtitleStyle } from '@/types';
 
 type Step = 'video' | 'subtitles' | 'broll' | 'music' | 'shorts' | 'review';
@@ -49,6 +56,10 @@ export default function NewProjectPage() {
   const [projectTitle, setProjectTitle] = useState('');
   const [selectedVideo, setSelectedVideo] = useState<string>('');
   const [subtitleStyle, setSubtitleStyle] = useState('mrbeast');
+  const [subtitleConfigMode, setSubtitleConfigMode] = useState<SubtitleConfigMode>('default');
+  const [subtitleConfig, setSubtitleConfig] = useState<ProjectSubtitleConfig>(
+    DEFAULT_PROJECT_SUBTITLE_CONFIG
+  );
   const [addBroll, setAddBroll] = useState(false);
   const [brollSfx, setBrollSfx] = useState(false);
   const [selectedMusic, setSelectedMusic] = useState<string>('');
@@ -103,6 +114,10 @@ export default function NewProjectPage() {
           music_track_id: selectedMusic || null,
           music_volume: musicVolume,
           subtitle_style: subtitleStyle,
+          subtitle_config_override: buildProjectSubtitleConfigOverride(
+            subtitleConfigMode,
+            subtitleConfig
+          ),
           generate_shorts: generateShorts,
           shorts_count: shortsCount,
         }
@@ -196,31 +211,44 @@ export default function NewProjectPage() {
         
       case 'subtitles':
         return (
-          <div>
-            <label className="block text-sm font-medium text-slate-300 mb-3">
-              Choose Subtitle Style
-            </label>
-            <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-              {subtitleStyles.map((style) => (
-                <Card
-                  key={style.id}
-                  hover
-                  className={`cursor-pointer transition-all ${
-                    subtitleStyle === style.id 
-                      ? 'ring-2 ring-violet-500 border-violet-500' 
-                      : ''
-                  }`}
-                  onClick={() => setSubtitleStyle(style.id)}
-                >
-                  <CardContent className="p-4 text-center">
-                    <div className="h-16 bg-slate-800 rounded-lg mb-3 flex items-center justify-center">
-                      <span className="text-lg font-bold text-white">{style.name}</span>
-                    </div>
-                    <p className="text-xs text-slate-400">{style.description}</p>
-                  </CardContent>
-                </Card>
-              ))}
+          <div className="space-y-6">
+            <div>
+              <label className="block text-sm font-medium text-slate-300 mb-3">
+                Choose Subtitle Style
+              </label>
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+                {subtitleStyles.map((style) => (
+                  <Card
+                    key={style.id}
+                    hover
+                    className={`cursor-pointer transition-all ${
+                      subtitleStyle === style.id 
+                        ? 'ring-2 ring-violet-500 border-violet-500' 
+                        : ''
+                    }`}
+                    onClick={() => setSubtitleStyle(style.id)}
+                  >
+                    <CardContent className="p-4 text-center">
+                      <div className="h-16 bg-slate-800 rounded-lg mb-3 flex items-center justify-center">
+                        <span className="text-lg font-bold text-white">{style.name}</span>
+                      </div>
+                      <p className="text-xs text-slate-400">{style.description}</p>
+                    </CardContent>
+                  </Card>
+                ))}
+              </div>
             </div>
+
+            <Card>
+              <CardContent className="p-6">
+                <SubtitleConfigEditor
+                  mode={subtitleConfigMode}
+                  value={subtitleConfig}
+                  onModeChange={setSubtitleConfigMode}
+                  onChange={setSubtitleConfig}
+                />
+              </CardContent>
+            </Card>
           </div>
         );
         
@@ -490,6 +518,16 @@ export default function NewProjectPage() {
                         <Type className="h-4 w-4" />
                         {subtitleStyle}
                       </span>
+                      <span
+                        className={`inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-sm ${
+                          subtitleConfigMode === 'custom'
+                            ? 'bg-fuchsia-500/15 text-fuchsia-200'
+                            : 'bg-slate-800 text-slate-400'
+                        }`}
+                      >
+                        <Type className="h-4 w-4" />
+                        {subtitleConfigMode === 'custom' ? 'Custom subtitle config' : 'Default subtitle config'}
+                      </span>
                       <span className={`inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-sm ${addBroll ? 'bg-emerald-500/15 text-emerald-200' : 'bg-slate-800 text-slate-400'}`}>
                         <Sparkles className="h-4 w-4" />
                         {addBroll ? 'B-Roll enabled' : 'B-Roll disabled'}
@@ -520,6 +558,22 @@ export default function NewProjectPage() {
                         </div>
                         <span className="rounded-full bg-violet-500/15 px-3 py-1 text-xs font-medium text-violet-200">
                           {subtitleStyle}
+                        </span>
+                      </div>
+
+                      <div className="flex items-center justify-between rounded-2xl bg-slate-900/70 px-4 py-3">
+                        <div className="flex items-center gap-3">
+                          <Type className="h-4 w-4 text-fuchsia-300" />
+                          <span className="text-sm text-slate-400">Subtitle Config</span>
+                        </div>
+                        <span
+                          className={`rounded-full px-3 py-1 text-xs font-medium ${
+                            subtitleConfigMode === 'custom'
+                              ? 'bg-fuchsia-500/15 text-fuchsia-200'
+                              : 'bg-slate-800 text-slate-400'
+                          }`}
+                        >
+                          {subtitleConfigMode === 'custom' ? 'Custom override' : 'Default'}
                         </span>
                       </div>
 

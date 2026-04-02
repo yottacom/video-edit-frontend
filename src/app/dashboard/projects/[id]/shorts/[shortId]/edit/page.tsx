@@ -2,33 +2,53 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
-import { ArrowLeft, Loader2, RefreshCw, Save, Scissors, Wand2 } from 'lucide-react';
+import {
+  Activity,
+  ArrowLeft,
+  CalendarClock,
+  Layers3,
+  ListOrdered,
+  Loader2,
+  Music,
+  RefreshCw,
+  Save,
+  Scissors,
+  Wand2,
+} from 'lucide-react';
 import { DashboardLayout } from '@/components/layout/DashboardLayout';
 import { InlineVideoPlayer } from '@/components/media/InlineVideoPlayer';
+import { ShortSegmentsTimelineEditor } from '@/components/projects/ShortSegmentsTimelineEditor';
 import { Card, CardContent } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { SubtitleConfigEditor } from '@/components/projects/SubtitleConfigEditor';
-import {
-  JsonEditorField,
-  MusicTrackPicker,
-  SubtitleStylePicker,
-} from '@/components/projects/ProjectEditorFields';
+import { MusicTrackPicker, SubtitleStylePicker } from '@/components/projects/ProjectEditorFields';
 import { getApiErrorMessage, musicTracksApi, projectsApi, subtitleStylesApi } from '@/lib/api';
 import {
   buildProjectSubtitleConfigOverride,
   DEFAULT_PROJECT_SUBTITLE_CONFIG,
-  formatJsonInput,
-  parseJsonArrayInput,
+  getProjectShortTimelineDuration,
   ProjectSubtitleConfig,
   resolveProjectSubtitleConfigState,
+  sanitizeProjectShortSegments,
   SubtitleConfigMode,
 } from '@/lib/project-editing';
-import { EditProject, MusicTrack, ProjectShort, ProjectShortEditPayload, SubtitleStyle } from '@/types';
+import {
+  EditProject,
+  MusicTrack,
+  ProjectShort,
+  ProjectShortEditPayload,
+  ProjectShortSegment,
+  SubtitleStyle,
+} from '@/types';
 
 interface JsonFieldErrors {
   segments: string | null;
   duration: string | null;
+}
+
+function getMaxSegmentEndMs(segments: ProjectShortSegment[]) {
+  return segments.reduce((currentMax, segment) => Math.max(currentMax, segment.end_ms), 0);
 }
 
 export default function ProjectShortEditPage() {
@@ -42,7 +62,7 @@ export default function ProjectShortEditPage() {
   const [musicTracks, setMusicTracks] = useState<MusicTrack[]>([]);
   const [subtitleStyles, setSubtitleStyles] = useState<SubtitleStyle[]>([]);
   const [title, setTitle] = useState('');
-  const [segmentsText, setSegmentsText] = useState('[]');
+  const [segments, setSegments] = useState<ProjectShortSegment[]>([]);
   const [totalDurationMs, setTotalDurationMs] = useState('0');
   const [subtitleStyle, setSubtitleStyle] = useState('');
   const [selectedMusicId, setSelectedMusicId] = useState('');
@@ -72,9 +92,13 @@ export default function ProjectShortEditPage() {
         return;
       }
 
+      const sanitizedSegments = sanitizeProjectShortSegments(matchingShort.segments);
+      const maxSegmentEndMs = getMaxSegmentEndMs(sanitizedSegments);
+      const normalizedTotalDurationMs = Math.max(matchingShort.total_duration_ms ?? 0, maxSegmentEndMs);
+
       setTitle(matchingShort.title || '');
-      setSegmentsText(formatJsonInput(matchingShort.segments, '[]'));
-      setTotalDurationMs(String(matchingShort.total_duration_ms ?? 0));
+      setSegments(sanitizedSegments);
+      setTotalDurationMs(String(normalizedTotalDurationMs));
       setSubtitleStyle(matchingShort.subtitle_style || data.config.shorts_subtitle_style || data.config.subtitle_style || '');
       setSelectedMusicId(matchingShort.music_track_id || data.config.shorts_music_track_id || '');
       setMusicVolume(
@@ -94,6 +118,30 @@ export default function ProjectShortEditPage() {
     },
     [shortId]
   );
+
+  const handleSegmentsChange = useCallback((nextSegments: ProjectShortSegment[]) => {
+    const maxSegmentEndMs = getMaxSegmentEndMs(nextSegments);
+
+    setSegments(nextSegments);
+    setJsonErrors((currentErrors) => ({
+      ...currentErrors,
+      segments: null,
+      duration: null,
+    }));
+    setErrorMessage(null);
+
+    setTotalDurationMs((currentValue) => {
+      const parsedCurrentDuration = Number.parseInt(currentValue, 10);
+      const safeCurrentDuration =
+        Number.isFinite(parsedCurrentDuration) && parsedCurrentDuration >= 0 ? parsedCurrentDuration : 0;
+
+      if (maxSegmentEndMs > safeCurrentDuration) {
+        return String(maxSegmentEndMs);
+      }
+
+      return currentValue;
+    });
+  }, []);
 
   useEffect(() => {
     async function loadData() {
@@ -120,26 +168,54 @@ export default function ProjectShortEditPage() {
     void loadData();
   }, [applyProjectToForm, projectId]);
 
+  const handleAddSegment = useCallback(() => {
+    const currentDuration = Number.parseInt(totalDurationMs, 10);
+    const safeCurrentDuration = Number.isFinite(currentDuration) && currentDuration >= 0 ? currentDuration : 0;
+    const nextStart = segments.length > 0
+      ? segments.reduce((currentMax, segment) => Math.max(currentMax, segment.end_ms), 0)
+      : 0;
+    const nextEnd = nextStart + 5000;
+
+    handleSegmentsChange([
+      ...segments,
+      {
+        start_ms: nextStart,
+        end_ms: nextEnd,
+      },
+    ]);
+
+    if (nextEnd > safeCurrentDuration) {
+      setTotalDurationMs(String(nextEnd));
+    }
+  }, [handleSegmentsChange, segments, totalDurationMs]);
+
+  const handleDeleteSegment = useCallback((segmentIndex: number) => {
+    handleSegmentsChange(segments.filter((_, index) => index !== segmentIndex));
+  }, [handleSegmentsChange, segments]);
+
   const buildPayload = useCallback((): ProjectShortEditPayload | null => {
     const nextErrors: JsonFieldErrors = {
       segments: null,
       duration: null,
     };
 
-    let parsedSegments: Record<string, unknown>[] = [];
-
-    try {
-      parsedSegments = parseJsonArrayInput<Record<string, unknown>>(
-        segmentsText,
-        'Short segments'
-      );
-    } catch (error) {
-      nextErrors.segments = error instanceof Error ? error.message : 'Invalid segments JSON.';
-    }
-
     const parsedDuration = Number.parseInt(totalDurationMs, 10);
+    const maxSegmentEndMs = getMaxSegmentEndMs(segments);
     if (!Number.isFinite(parsedDuration) || parsedDuration < 0) {
       nextErrors.duration = 'Total duration must be a non-negative number of milliseconds.';
+    }
+
+    const invalidSegment = segments.find((segment) => {
+      return (
+        !Number.isFinite(segment.start_ms) ||
+        !Number.isFinite(segment.end_ms) ||
+        segment.start_ms < 0 ||
+        segment.end_ms <= segment.start_ms
+      );
+    });
+
+    if (invalidSegment) {
+      nextErrors.segments = 'Each segment must have a valid start and end time, and the end must be after the start.';
     }
 
     setJsonErrors(nextErrors);
@@ -149,16 +225,21 @@ export default function ProjectShortEditPage() {
       return null;
     }
 
+    const normalizedDuration = Math.max(parsedDuration, maxSegmentEndMs);
+    if (normalizedDuration !== parsedDuration) {
+      setTotalDurationMs(String(normalizedDuration));
+    }
+
     return {
       title,
-      segments: parsedSegments,
-      total_duration_ms: parsedDuration,
+      segments,
+      total_duration_ms: normalizedDuration,
       subtitle_style: subtitleStyle,
       subtitle_config_override: buildProjectSubtitleConfigOverride(subtitleConfigMode, subtitleConfig),
       music_track_id: selectedMusicId || null,
       music_volume: musicVolume,
     };
-  }, [musicVolume, selectedMusicId, segmentsText, subtitleConfig, subtitleConfigMode, subtitleStyle, title, totalDurationMs]);
+  }, [musicVolume, selectedMusicId, segments, subtitleConfig, subtitleConfigMode, subtitleStyle, title, totalDurationMs]);
 
   const handleSave = async () => {
     const payload = buildPayload();
@@ -232,21 +313,26 @@ export default function ProjectShortEditPage() {
   }
 
   const selectedTrack = musicTracks.find((track) => track.id === selectedMusicId) || null;
+  const parsedTimelineDuration = Number.parseInt(totalDurationMs, 10);
+  const timelineDurationMs = getProjectShortTimelineDuration(
+    Number.isFinite(parsedTimelineDuration) ? parsedTimelineDuration : null,
+    segments
+  );
 
   return (
     <DashboardLayout>
-      <div className="mb-8 flex items-center gap-4">
+      <div className="mb-8 flex flex-wrap items-center gap-4">
         <button
           onClick={() => router.push(`/dashboard/projects/${projectId}`)}
           className="p-2 text-slate-400 transition-colors hover:text-white"
         >
           <ArrowLeft className="h-6 w-6" />
         </button>
-        <div className="flex-1">
+        <div className="min-w-0 flex-1">
           <h1 className="text-2xl font-bold text-white">Edit Short</h1>
           <p className="text-slate-400">Update {short.title} and regenerate a fresh short render when ready.</p>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3">
           <Button variant="secondary" onClick={() => router.push(`/dashboard/projects/${projectId}`)}>
             Cancel
           </Button>
@@ -276,8 +362,8 @@ export default function ProjectShortEditPage() {
         </div>
       )}
 
-      <div className="grid gap-6 xl:grid-cols-[1.45fr_0.95fr]">
-        <div className="space-y-6">
+      <div className="space-y-6">
+        <div className="min-w-0 space-y-6">
           <Card>
             <CardContent className="p-6">
               <div className="mb-4 flex items-center gap-3">
@@ -307,6 +393,80 @@ export default function ProjectShortEditPage() {
 
           <Card>
             <CardContent className="p-6">
+              <div className="mb-4 flex items-center gap-3">
+                <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-violet-500/15 text-violet-300">
+                  <Wand2 className="h-5 w-5" />
+                </div>
+                <div>
+                  <h2 className="text-lg font-semibold text-white">Short Snapshot</h2>
+                  <p className="text-sm text-slate-400">The current clip state inside this project.</p>
+                </div>
+              </div>
+
+              <div className="space-y-3">
+                <div className="rounded-2xl bg-slate-900/70 px-4 py-3">
+                  <div className="flex items-start gap-3">
+                    <div className="mt-0.5 flex h-9 w-9 items-center justify-center rounded-xl bg-slate-800 text-violet-300">
+                      <ListOrdered className="h-4 w-4" />
+                    </div>
+                    <div>
+                      <p className="text-sm text-slate-400">Clip Order</p>
+                      <p className="mt-1 font-medium text-white">Clip {short.order + 1}</p>
+                    </div>
+                  </div>
+                </div>
+                <div className="rounded-2xl bg-slate-900/70 px-4 py-3">
+                  <div className="flex items-start gap-3">
+                    <div className="mt-0.5 flex h-9 w-9 items-center justify-center rounded-xl bg-slate-800 text-cyan-300">
+                      <Activity className="h-4 w-4" />
+                    </div>
+                    <div>
+                      <p className="text-sm text-slate-400">Status</p>
+                      <p className="mt-1 font-medium capitalize text-white">{short.status}</p>
+                    </div>
+                  </div>
+                </div>
+                <div className="rounded-2xl bg-slate-900/70 px-4 py-3">
+                  <div className="flex items-start gap-3">
+                    <div className="mt-0.5 flex h-9 w-9 items-center justify-center rounded-xl bg-slate-800 text-emerald-300">
+                      <Layers3 className="h-4 w-4" />
+                    </div>
+                    <div>
+                      <p className="text-sm text-slate-400">Segments</p>
+                      <p className="mt-1 font-medium text-white">{segments.length}</p>
+                    </div>
+                  </div>
+                </div>
+                <div className="rounded-2xl bg-slate-900/70 px-4 py-3">
+                  <div className="flex items-start gap-3">
+                    <div className="mt-0.5 flex h-9 w-9 items-center justify-center rounded-xl bg-slate-800 text-fuchsia-300">
+                      <Music className="h-4 w-4" />
+                    </div>
+                    <div>
+                      <p className="text-sm text-slate-400">Current Music</p>
+                      <p className="mt-1 font-medium text-white">{selectedTrack?.title || 'No music selected'}</p>
+                    </div>
+                  </div>
+                </div>
+                <div className="rounded-2xl bg-slate-900/70 px-4 py-3">
+                  <div className="flex items-start gap-3">
+                    <div className="mt-0.5 flex h-9 w-9 items-center justify-center rounded-xl bg-slate-800 text-amber-300">
+                      <CalendarClock className="h-4 w-4" />
+                    </div>
+                    <div>
+                      <p className="text-sm text-slate-400">Updated</p>
+                      <p className="mt-1 font-medium text-white">
+                        {new Date(short.updated_at).toLocaleString()}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardContent className="p-6">
               <Input
                 label="Short Title"
                 placeholder="Enter a short title"
@@ -315,14 +475,22 @@ export default function ProjectShortEditPage() {
               />
 
               <div className="mt-5">
-                <Input
-                  label="Total Duration (ms)"
-                  type="number"
-                  min="0"
-                  value={totalDurationMs}
-                  onChange={(event) => setTotalDurationMs(event.target.value)}
-                  error={jsonErrors.duration || undefined}
-                />
+              <Input
+                label="Total Duration (ms)"
+                type="number"
+                min="0"
+                value={totalDurationMs}
+                onChange={(event) => {
+                  setTotalDurationMs(event.target.value);
+                  setJsonErrors((currentErrors) => ({
+                    ...currentErrors,
+                    duration: null,
+                    segments: null,
+                  }));
+                  setErrorMessage(null);
+                }}
+                error={jsonErrors.duration || undefined}
+              />
               </div>
             </CardContent>
           </Card>
@@ -362,64 +530,16 @@ export default function ProjectShortEditPage() {
 
           <Card>
             <CardContent className="p-6">
-              <JsonEditorField
-                label="Short Segments"
-                description="Editable JSON array sent directly to the short update API as `segments`."
-                value={segmentsText}
-                onChange={setSegmentsText}
+              <ShortSegmentsTimelineEditor
+                videoUrl={short.output_url}
+                thumbnailUrl={short.thumbnail_url}
+                segments={segments}
+                timelineDurationMs={timelineDurationMs}
+                onChange={handleSegmentsChange}
+                onAddSegment={handleAddSegment}
+                onDeleteSegment={handleDeleteSegment}
                 error={jsonErrors.segments}
-                placeholder="[]"
               />
-            </CardContent>
-          </Card>
-        </div>
-
-        <div className="space-y-6">
-          <Card>
-            <CardContent className="p-6">
-              <div className="mb-4 flex items-center gap-3">
-                <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-violet-500/15 text-violet-300">
-                  <Wand2 className="h-5 w-5" />
-                </div>
-                <div>
-                  <h2 className="text-lg font-semibold text-white">Short Snapshot</h2>
-                  <p className="text-sm text-slate-400">The current clip state inside this project.</p>
-                </div>
-              </div>
-
-              <div className="space-y-3">
-                <div className="rounded-2xl bg-slate-900/70 px-4 py-3">
-                  <p className="text-sm text-slate-400">Clip Order</p>
-                  <p className="mt-1 font-medium text-white">Clip {short.order + 1}</p>
-                </div>
-                <div className="rounded-2xl bg-slate-900/70 px-4 py-3">
-                  <p className="text-sm text-slate-400">Status</p>
-                  <p className="mt-1 font-medium capitalize text-white">{short.status}</p>
-                </div>
-                <div className="rounded-2xl bg-slate-900/70 px-4 py-3">
-                  <p className="text-sm text-slate-400">Segments</p>
-                  <p className="mt-1 font-medium text-white">{short.segments.length}</p>
-                </div>
-                <div className="rounded-2xl bg-slate-900/70 px-4 py-3">
-                  <p className="text-sm text-slate-400">Current Music</p>
-                  <p className="mt-1 font-medium text-white">{selectedTrack?.title || 'No music selected'}</p>
-                </div>
-                <div className="rounded-2xl bg-slate-900/70 px-4 py-3">
-                  <p className="text-sm text-slate-400">Updated</p>
-                  <p className="mt-1 font-medium text-white">
-                    {new Date(short.updated_at).toLocaleString()}
-                  </p>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardContent className="p-6">
-              <div className="space-y-3 text-sm text-slate-400">
-                <p>`Save Changes` updates the short configuration and keeps you on this page.</p>
-                <p>`Save + Regenerate` saves the current form, triggers the short regenerate API, and returns you to the project detail page so you can watch progress there.</p>
-              </div>
             </CardContent>
           </Card>
         </div>
