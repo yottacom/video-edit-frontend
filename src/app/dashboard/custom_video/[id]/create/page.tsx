@@ -433,6 +433,9 @@ const AssetPicker: React.FC<{
   const availableAssetTypes = allowedTypes && allowedTypes.length > 0
     ? allowedTypes
     : (['image', 'video', 'audio'] as AssetType[]);
+  const currentAiContentType = availableAssetTypes.includes(aiContentType)
+    ? aiContentType
+    : availableAssetTypes[0];
   const isGenerationBusy = generatingAI || pollingGeneration;
   const filteredImageLibraryAssets = libraryAssets.filter((asset) => {
     if (asset.type !== 'image') {
@@ -445,18 +448,21 @@ const AssetPicker: React.FC<{
 
     return asset.title.toLowerCase().includes(assetSelectionSearch.trim().toLowerCase());
   });
-  const isVideoUsingBaseImage = aiContentType === 'video' && videoGenerationMode === 'base-image';
+  const isVideoUsingBaseImage = currentAiContentType === 'video' && videoGenerationMode === 'base-image';
+  const requiresImageDependencyValidation = currentAiContentType === 'image' || currentAiContentType === 'video';
   const hasPendingReferenceImages = selectedReferenceImages.some((asset) => asset.status !== 'ready');
   const hasPendingBaseImage = !!selectedBaseImage && selectedBaseImage.status !== 'ready';
   const canGenerate =
     !isGenerationBusy &&
-    !uploadingReferenceImages &&
-    !hasPendingReferenceImages &&
-    !hasPendingBaseImage &&
+    (!requiresImageDependencyValidation || (
+      !uploadingReferenceImages &&
+      !hasPendingReferenceImages &&
+      !hasPendingBaseImage
+    )) &&
     (
-      aiContentType === 'image'
+      currentAiContentType === 'image'
         ? aiPrompt.trim().length > 0
-        : aiContentType === 'video'
+        : currentAiContentType === 'video'
           ? (
               isVideoUsingBaseImage
                 ? !!selectedBaseImage && aiMotionPrompt.trim().length > 0
@@ -473,6 +479,12 @@ const AssetPicker: React.FC<{
     setPreviewAsset(null);
     onClose();
   };
+
+  useEffect(() => {
+    if (aiContentType !== currentAiContentType) {
+      onAiContentTypeChange(currentAiContentType);
+    }
+  }, [aiContentType, currentAiContentType, onAiContentTypeChange]);
 
   if (!isOpen) return null;
 
@@ -849,7 +861,7 @@ const AssetPicker: React.FC<{
                     <div className="relative">
                       <select
                         id="picker-ai-content-type"
-                        value={aiContentType}
+                        value={currentAiContentType}
                         onChange={(event) => onAiContentTypeChange(event.target.value as AssetType)}
                         disabled={isGenerationBusy}
                         className="block w-full appearance-none rounded-md border border-slate-700 bg-slate-800 py-2 pl-3 pr-10 text-base text-white placeholder-slate-500 focus:border-violet-500 focus:ring-violet-500 sm:text-sm"
@@ -866,10 +878,10 @@ const AssetPicker: React.FC<{
                     </div>
                   </div>
 
-                  {(aiContentType === 'image' || aiContentType === 'audio') && (
+                  {(currentAiContentType === 'image' || currentAiContentType === 'audio') && (
                     <div>
                       <label htmlFor="picker-ai-prompt" className="mb-2 block text-sm font-medium text-slate-300">
-                        {aiContentType === 'audio' ? 'What should the voice say?' : 'Describe what you want to create'}
+                        {currentAiContentType === 'audio' ? 'What should the voice say?' : 'Describe what you want to create'}
                       </label>
                       <textarea
                         id="picker-ai-prompt"
@@ -878,16 +890,16 @@ const AssetPicker: React.FC<{
                         rows={4}
                         disabled={isGenerationBusy}
                         placeholder={
-                          aiContentType === 'audio'
+                          currentAiContentType === 'audio'
                             ? 'Enter the text you want converted to audio'
-                            : `Describe the ${aiContentType} you want to generate`
+                            : `Describe the ${currentAiContentType} you want to generate`
                         }
                         className="block w-full rounded-md border border-slate-700 bg-slate-800 p-3 text-base text-white placeholder-slate-500 shadow-sm focus:border-violet-500 focus:ring-violet-500 sm:text-sm"
                       />
                     </div>
                   )}
 
-                  {aiContentType !== 'audio' && (
+                  {currentAiContentType !== 'audio' && (
                     <div>
                       <label htmlFor="picker-ai-aspect-ratio" className="mb-2 block text-sm font-medium text-slate-300">Aspect Ratio</label>
                       <select
@@ -904,7 +916,7 @@ const AssetPicker: React.FC<{
                     </div>
                   )}
 
-                  {aiContentType === 'image' && (
+                  {currentAiContentType === 'image' && (
                     <div className="space-y-4 rounded-2xl border border-slate-800 bg-slate-950/70 p-4">
                       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                         <div className="min-w-0">
@@ -1008,7 +1020,7 @@ const AssetPicker: React.FC<{
                     </div>
                   )}
 
-                  {aiContentType === 'video' && (
+                  {currentAiContentType === 'video' && (
                     <div className="space-y-4">
                       <div>
                         <label className="mb-2 block text-sm font-medium text-slate-300">Video Source</label>
@@ -1237,7 +1249,7 @@ const AssetPicker: React.FC<{
                     </div>
                   )}
 
-                  {aiContentType === 'video' ? (
+                  {currentAiContentType === 'video' ? (
                     <div>
                       <label htmlFor="picker-ai-video-duration" className="mb-2 block text-sm font-medium text-slate-300">Duration (seconds)</label>
                       <select
@@ -1251,19 +1263,23 @@ const AssetPicker: React.FC<{
                         <option value="10">10 seconds</option>
                       </select>
                     </div>
-                  ) : aiContentType === 'audio' ? (
-                    <Input
-                      label="Duration (seconds)"
-                      type="number"
-                      min="1"
-                      step="1"
-                      value={aiDurationSeconds}
-                      onChange={(event) => onAiDurationSecondsChange(event.target.value)}
-                      disabled={isGenerationBusy}
-                    />
+                  ) : currentAiContentType === 'audio' ? (
+                    <div>
+                      <label htmlFor="picker-ai-audio-duration" className="mb-2 block text-sm font-medium text-slate-300">Duration (seconds)</label>
+                      <input
+                        id="picker-ai-audio-duration"
+                        type="number"
+                        min="1"
+                        step="1"
+                        value={aiDurationSeconds}
+                        onChange={(event) => onAiDurationSecondsChange(event.target.value)}
+                        disabled={isGenerationBusy}
+                        className="block w-full rounded-md border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-white focus:border-violet-500 focus:ring-violet-500"
+                      />
+                    </div>
                   ) : null}
 
-                  {aiContentType === 'audio' && (
+                  {currentAiContentType === 'audio' && (
                     <div className="space-y-3">
                       <div className="flex items-center justify-between">
                         <label className="block text-sm font-medium text-slate-300">ElevenLabs Voice</label>
@@ -1360,7 +1376,7 @@ const AssetPicker: React.FC<{
                     {isGenerationBusy ? 'Close' : 'Cancel'}
                   </Button>
                   <Button onClick={onGenerate} loading={generatingAI} disabled={!canGenerate} className="flex-1">
-                    {generatingAI ? 'Starting...' : pollingGeneration ? 'Generating...' : `Generate ${getAssetTypeLabel(aiContentType)}`}
+                    {generatingAI ? 'Starting...' : pollingGeneration ? 'Generating...' : `Generate ${getAssetTypeLabel(currentAiContentType)}`}
                   </Button>
                 </div>
               </div>
@@ -2464,10 +2480,13 @@ const [hasLoadedBackgroundTracksOnce, setHasLoadedBackgroundTracksOnce] = useSta
     setPickerPage(1);
   }, [loadPickerAssets, pickerPage]);
 
-  const resetPickerGenerationState = useCallback(() => {
+  const resetPickerGenerationState = useCallback((initialContentType?: AssetType) => {
+    const nextContentType =
+      initialContentType ||
+      (pickerAllowedTypes && pickerAllowedTypes.length > 0 ? pickerAllowedTypes[0] : 'image');
     setPickerAiPrompt('');
     setPickerAiMotionPrompt('');
-    setPickerAiContentType('image');
+    setPickerAiContentType(nextContentType);
     setPickerAiAspectRatio('1:1');
     setPickerAiDurationSeconds('5');
     setPickerAiRemoveBackground(false);
@@ -2480,12 +2499,13 @@ const [hasLoadedBackgroundTracksOnce, setHasLoadedBackgroundTracksOnce] = useSta
     setPickerSelectedVoice(null);
     setPickerVoicesSearch('');
     setPickerShowVoicePicker(false);
-  }, []);
+  }, [pickerAllowedTypes]);
 
   const openAssetPicker = useCallback((
     target: { sceneId?: string; rowType: 'primary' | 'secondary' | 'narration' | 'globalBg'; secondaryOverlapIndex?: number; },
     allowedTypes?: AssetType[]
   ) => {
+    const nextContentType = allowedTypes && allowedTypes.length > 0 ? allowedTypes[0] : 'image';
     setCurrentPickerTarget(target);
     setPickerAllowedTypes(allowedTypes);
     setShowAssetPicker(true);
@@ -2495,7 +2515,7 @@ const [hasLoadedBackgroundTracksOnce, setHasLoadedBackgroundTracksOnce] = useSta
     setPickerAssetTypeFilter(allowedTypes && allowedTypes.length > 0 ? allowedTypes[0] : 'all');
     setPickerPage(1);
     resetPickerUploadState();
-    resetPickerGenerationState();
+    resetPickerGenerationState(nextContentType);
   }, [resetPickerGenerationState, resetPickerUploadState]);
 
   const closeAssetPicker = useCallback(() => {
@@ -2649,16 +2669,16 @@ const [hasLoadedBackgroundTracksOnce, setHasLoadedBackgroundTracksOnce] = useSta
       return;
     }
 
-    if (pickerUploadingReferenceImages) {
+    if (pickerAiContentType !== 'audio' && pickerUploadingReferenceImages) {
       return;
     }
 
-    if (hasPendingReferenceImages) {
+    if (pickerAiContentType !== 'audio' && hasPendingReferenceImages) {
       setPickerGenerationError('Please wait for reference images to finish uploading before generating.');
       return;
     }
 
-    if (hasPendingBaseImage) {
+    if (pickerAiContentType !== 'audio' && hasPendingBaseImage) {
       setPickerGenerationError('Please wait for the selected base image to finish processing before generating.');
       return;
     }
