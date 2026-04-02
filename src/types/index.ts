@@ -200,17 +200,69 @@ export type ProjectStatus =
   | 'completed' 
   | 'failed';
 
+export interface ProjectRender {
+  id: string;
+  status: string;
+  progress: number;
+  mode: string | null;
+  subtitle_style: string | null;
+  subtitle_config_override: Record<string, unknown> | null;
+  music_track_id: string | null;
+  music_volume: number;
+  broll_enabled?: boolean;
+  broll_sfx?: boolean;
+  broll_snapshot?: Record<string, unknown>[] | null;
+  segments_snapshot?: Record<string, unknown>[] | null;
+  transcript_snapshot?: Record<string, unknown> | null;
+  source_video_url?: string | null;
+  remotion_render_id: string | null;
+  remotion_bucket_name: string | null;
+  render_response: Record<string, unknown> | null;
+  output_url: string | null;
+  error_message: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ProjectBrollSceneInput {
+  id: string;
+  order: number;
+  scene_type: string;
+  start_ms: number;
+  end_ms: number;
+  position: string;
+  image_prompt: string | null;
+  motion_prompt: string | null;
+  image_url: string | null;
+  video_url: string | null;
+  sfx_url: string | null;
+  status: string;
+  error: string | null;
+}
+
+export interface ProjectScene extends ProjectBrollSceneInput {
+  voiceover_url: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface ProjectShort {
   id: string;
   title: string;
   order: number;
   status: ProjectStatus;
   progress: number;
-  segments: unknown[];
+  segments: Record<string, unknown>[];
   total_duration_ms: number | null;
   output_url: string | null;
   thumbnail_url: string | null;
   error: string | null;
+  subtitle_style?: string | null;
+  subtitle_config_override?: Record<string, unknown> | null;
+  music_track_id?: string | null;
+  music_volume?: number;
+  current_render_id?: string | null;
+  renders?: ProjectRender[];
   created_at: string;
   updated_at: string;
 }
@@ -224,9 +276,30 @@ export interface EditProject {
   config: ProjectConfig;
   output_url: string | null;
   error_message: string | null;
+  current_render_id?: string | null;
+  renders?: ProjectRender[];
+  scenes?: ProjectScene[];
   shorts?: ProjectShort[];
   created_at: string;
   updated_at: string;
+}
+
+export interface ProjectMainEditPayload {
+  music_track_id?: string | null;
+  music_volume?: number;
+  subtitle_style?: string;
+  subtitle_config_override?: Record<string, unknown> | null;
+  broll_scenes?: ProjectBrollSceneInput[];
+}
+
+export interface ProjectShortEditPayload {
+  title?: string;
+  segments?: Record<string, unknown>[];
+  total_duration_ms?: number;
+  subtitle_style?: string;
+  subtitle_config_override?: Record<string, unknown> | null;
+  music_track_id?: string | null;
+  music_volume?: number;
 }
 
 export interface SubtitleStyle {

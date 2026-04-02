@@ -9,11 +9,15 @@ import {
   CustomVideo,
   CustomVideoScene,
   CustomVideoScenePayload,
+  EditProject,
   ElevenLabsVoiceListResponse,
   MultipartListPart,
   MultipartStartResponse,
   PaginatedResponse,
   PartUrlResponse,
+  ProjectConfig,
+  ProjectMainEditPayload,
+  ProjectShortEditPayload,
   UploadItem,
 } from '@/types';
 
@@ -510,38 +514,20 @@ export const customVideosApi = {
   },
 };
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// EDIT PROJECTS API
-// ═══════════════════════════════════════════════════════════════════════════════
-
-export interface ProjectConfig {
-  add_broll: boolean;
-  broll_sfx: boolean;
-  music_track_id: string | null;
-  music_volume: number;
-  subtitle_style: string;
-  subtitle_config_override: Record<string, unknown> | null;
-  generate_shorts: boolean;
-  shorts_count: number;
-  shorts_subtitle_style: string;
-  shorts_music_track_id: string | null;
-  shorts_broll: boolean;
-}
-
 export const projectsApi = {
-  list: async (page = 1, pageSize = 20, status?: string) => {
+  list: async (page = 1, pageSize = 20, status?: string): Promise<PaginatedResponse<EditProject>> => {
     let url = `/api/editor/projects?page=${page}&page_size=${pageSize}`;
     if (status) url += `&status=${status}`;
     const res = await api.get(url);
     return res.data;
   },
   
-  get: async (id: string) => {
+  get: async (id: string): Promise<EditProject> => {
     const res = await api.get(`/api/editor/projects/${id}`);
     return res.data;
   },
   
-  create: async (title: string, sourceVideoId: string, config: Partial<ProjectConfig>) => {
+  create: async (title: string, sourceVideoId: string, config: Partial<ProjectConfig>): Promise<EditProject> => {
     const res = await api.post('/api/editor/projects', {
       title,
       source_video_id: sourceVideoId,
@@ -550,18 +536,38 @@ export const projectsApi = {
     return res.data;
   },
   
-  update: async (id: string, config: Partial<ProjectConfig>) => {
+  update: async (id: string, config: Partial<ProjectConfig>): Promise<EditProject> => {
     const res = await api.patch(`/api/editor/projects/${id}`, config);
     return res.data;
   },
   
-  process: async (id: string) => {
+  process: async (id: string): Promise<EditProject> => {
     const res = await api.post(`/api/editor/projects/${id}/process`);
     return res.data;
   },
   
-  poll: async (id: string) => {
+  poll: async (id: string): Promise<EditProject> => {
     const res = await api.get(`/api/editor/projects/${id}/poll`);
+    return res.data;
+  },
+
+  updateMainEdit: async (id: string, payload: ProjectMainEditPayload): Promise<EditProject> => {
+    const res = await api.patch(`/api/editor/projects/${id}/main-edit`, payload);
+    return res.data;
+  },
+
+  regenerateMain: async (id: string): Promise<EditProject> => {
+    const res = await api.post(`/api/editor/projects/${id}/main-edit/regenerate`);
+    return res.data;
+  },
+
+  updateShort: async (id: string, shortId: string, payload: ProjectShortEditPayload): Promise<EditProject> => {
+    const res = await api.patch(`/api/editor/projects/${id}/shorts/${shortId}`, payload);
+    return res.data;
+  },
+
+  regenerateShort: async (id: string, shortId: string): Promise<EditProject> => {
+    const res = await api.post(`/api/editor/projects/${id}/shorts/${shortId}/regenerate`);
     return res.data;
   },
   

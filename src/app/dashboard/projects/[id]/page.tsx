@@ -5,7 +5,7 @@ import { useParams, useRouter } from 'next/navigation';
 import { 
   ArrowLeft, Download, ExternalLink, AudioLines,
   Loader2, CheckCircle, XCircle, Clock, Sparkles,
-  Video, Music, Type, Scissors, RefreshCw, Tag, Play, X
+  Video, Music, Type, Scissors, RefreshCw, Tag, Play, X, Pencil
 } from 'lucide-react';
 import { DashboardLayout } from '@/components/layout/DashboardLayout';
 import { InlineVideoPlayer } from '@/components/media/InlineVideoPlayer';
@@ -13,6 +13,7 @@ import { VideoThumbnail } from '@/components/media/VideoThumbnail';
 import { Card, CardContent } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { projectsApi, sourceVideosApi, musicTracksApi } from '@/lib/api';
+import { isProcessingStatus, shouldPollProject } from '@/lib/project-editing';
 import { EditProject, SourceVideo, MusicTrack } from '@/types';
 
 const statusConfig: Record<string, { icon: React.ElementType; color: string; bgColor: string; label: string }> = {
@@ -59,10 +60,12 @@ export default function ProjectDetailPage() {
         try {
           const tracks = await musicTracksApi.list();
           const track = tracks.items.find((t: MusicTrack) => t.id === data.config.music_track_id);
-          if (track) setMusicTrack(track);
+          setMusicTrack(track || null);
         } catch (e) {
           console.error('Failed to load music track:', e);
         }
+      } else {
+        setMusicTrack(null);
       }
       
       return data;
@@ -80,7 +83,7 @@ export default function ProjectDetailPage() {
       const data = await projectsApi.poll(projectId);
       setProject((prev) => (prev ? { ...prev, ...data } : null));
 
-      if (['pending', 'transcribing', 'planning', 'generating', 'rendering'].includes(data.status)) {
+      if (shouldPollProject(data)) {
         pollTimeoutRef.current = setTimeout(() => {
           void pollProjectStatus();
         }, 3000);
@@ -121,9 +124,7 @@ export default function ProjectDetailPage() {
   }, [selectedShort]);
 
   // Poll for updates while processing
-  const isProjectProcessing = project
-    ? ['pending', 'transcribing', 'planning', 'generating', 'rendering'].includes(project.status)
-    : false;
+  const isProjectProcessing = shouldPollProject(project);
 
   useEffect(() => {
     if (!project) return;
@@ -172,8 +173,9 @@ export default function ProjectDetailPage() {
 
   const status = statusConfig[project.status] || statusConfig.draft;
   const StatusIcon = status.icon;
-  const isProcessing = ['pending', 'transcribing', 'planning', 'generating', 'rendering'].includes(project.status);
+  const isProcessing = isProcessingStatus(project.status);
   const projectShorts = project.shorts || [];
+  const areShortsProcessing = projectShorts.some((short) => isProcessingStatus(short.status));
   const formatDuration = (ms: number | null) => {
     if (!ms) return null;
 
@@ -218,6 +220,14 @@ export default function ProjectDetailPage() {
               </div>
 
               <div className="flex items-center gap-2">
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => router.push(`/dashboard/projects/${projectId}/shorts/${selectedShort.id}/edit`)}
+                >
+                  <Pencil className="h-4 w-4" />
+                  Edit Short
+                </Button>
                 <a href={selectedShort.output_url} download>
                   <Button size="sm">
                     <Download className="h-4 w-4" />
@@ -337,7 +347,16 @@ export default function ProjectDetailPage() {
           {project.status === 'completed' && project.output_url && (
             <Card>
               <CardContent className="p-6">
-                <h3 className="text-lg font-semibold text-white mb-4">Output Video</h3>
+                <div className="mb-4 flex items-center justify-between gap-3">
+                  <h3 className="text-lg font-semibold text-white">Output Video</h3>
+                  <Button
+                    variant="secondary"
+                    onClick={() => router.push(`/dashboard/projects/${projectId}/edit`)}
+                  >
+                    <Pencil className="h-4 w-4" />
+                    Edit Video
+                  </Button>
+                </div>
                 <InlineVideoPlayer
                   key={project.output_url}
                   videoUrl={project.output_url}
@@ -391,7 +410,11 @@ export default function ProjectDetailPage() {
                   </div>
                   <div>
                     <h3 className="text-lg font-semibold text-white">Generated Shorts</h3>
-                    <p className="text-sm text-slate-400">Only shown when the backend returns rendered short clips.</p>
+                    <p className="text-sm text-slate-400">
+                      {areShortsProcessing
+                        ? 'Short renders are updating automatically every few seconds.'
+                        : 'Only shown when the backend returns rendered short clips.'}
+                    </p>
                   </div>
                 </div>
 
@@ -450,6 +473,26 @@ export default function ProjectDetailPage() {
                               {short.error}
                             </div>
                           )}
+
+                          <div className="mt-4 flex flex-wrap gap-2">
+                            {short.output_url && (
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => setSelectedShort(short)}
+                              >
+                                <Play className="h-4 w-4" />
+                                Preview
+                              </Button>
+                            )}
+                            <Button
+                              size="sm"
+                              onClick={() => router.push(`/dashboard/projects/${projectId}/shorts/${short.id}/edit`)}
+                            >
+                              <Pencil className="h-4 w-4" />
+                              Edit Short
+                            </Button>
+                          </div>
                         </CardContent>
                       </Card>
                     );
