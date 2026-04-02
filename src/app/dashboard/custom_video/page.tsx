@@ -39,6 +39,7 @@ interface VideoProject {
   status: CustomVideoStatus;
   progress: number;
   outputUrl: string | null;
+  thumbnailUrl: string | null;
   errorMessage: string | null;
 }
 
@@ -109,6 +110,7 @@ function mapCustomVideoToProject(video: CustomVideo): VideoProject {
     status: video.status,
     progress: video.progress || 0,
     outputUrl: video.output_url || null,
+    thumbnailUrl: video.status === 'completed' && video.output_url ? `${video.output_url}#t=1` : null,
     errorMessage: video.error_message || null,
   };
 }
@@ -187,13 +189,25 @@ export default function CustomVideoPage() {
   }, [loadVideos]);
 
   useEffect(() => {
-    const previousOverflow = document.body.style.overflow;
-    if (selectedVideoToPlay || showCreateModal || videoToDelete) {
+    const hasModalOpen = selectedVideoToPlay || showCreateModal || videoToDelete;
+    
+    if (hasModalOpen) {
+      // Store the current overflow value before changing it
+      const currentOverflow = document.body.style.overflow || '';
       document.body.style.overflow = 'hidden';
+      
+      // Return cleanup function that restores the original overflow
+      return () => {
+        document.body.style.overflow = currentOverflow;
+      };
     }
-
+    
+    // No modal open, ensure overflow is not hidden
+    document.body.style.overflow = '';
+    
     return () => {
-      document.body.style.overflow = previousOverflow;
+      // Cleanup: ensure we don't leave overflow hidden
+      document.body.style.overflow = '';
     };
   }, [selectedVideoToPlay, showCreateModal, videoToDelete]);
 
@@ -557,26 +571,53 @@ export default function CustomVideoPage() {
             <Card
               key={video.id}
               hover
-              className="group relative overflow-hidden border-slate-700/70 bg-slate-900 shadow-xl transition-all duration-300 ease-in-out hover:scale-[1.02]"
+              className="group relative overflow-hidden border-slate-700/70 bg-slate-900 shadow-xl transition-all duration-300 ease-in-out hover:scale-[1.02] cursor-pointer"
+              onClick={() => {
+                if (video.outputUrl) {
+                  setSelectedVideoToPlay(video);
+                }
+              }}
             >
-              <div
-                className="relative overflow-hidden bg-slate-950"
-                onClick={() => {
-                  if (video.outputUrl) {
-                    setSelectedVideoToPlay(video);
-                  }
+              {/* Delete button positioned at top right */}
+              <button
+                onClick={(event) => {
+                  event.stopPropagation();
+                  setVideoToDelete(video);
                 }}
+                className="absolute top-3 right-3 z-10 rounded-lg bg-black/60 p-2 text-slate-400 transition-all duration-200 hover:bg-red-600/80 hover:text-white"
+                aria-label={`Delete ${video.title}`}
               >
+                <Trash2 className="h-4 w-4" />
+              </button>
+
+              <div className="relative overflow-hidden bg-slate-950">
                 <div className="flex aspect-[16/9] items-center justify-center bg-[radial-gradient(circle_at_top,_rgba(139,92,246,0.25),_transparent_55%),linear-gradient(180deg,rgba(15,23,42,0.9),rgba(2,6,23,1))]">
-                  {video.videoType === 'landscape' ? (
-                    <div className="flex h-24 w-40 items-center justify-center rounded-xl border border-dashed border-slate-600 bg-slate-900/70">
+                  {video.thumbnailUrl ? (
+                    <img
+                      src={video.thumbnailUrl}
+                      alt={video.title}
+                      className="h-full w-full object-cover"
+                      onError={(e) => {
+                        // Fallback to placeholder if thumbnail fails to load
+                        const target = e.target as HTMLImageElement;
+                        target.style.display = 'none';
+                        const fallback = target.nextElementSibling as HTMLElement;
+                        if (fallback) fallback.style.display = 'flex';
+                      }}
+                    />
+                  ) : null}
+                  
+                  {/* Fallback placeholder - shown when no thumbnail or thumbnail fails */}
+                  <div 
+                    className={`flex items-center justify-center rounded-xl border border-dashed border-slate-600 bg-slate-900/70 ${video.thumbnailUrl ? 'hidden' : ''}`}
+                    style={video.thumbnailUrl ? { display: 'none' } : {}}
+                  >
+                    {video.videoType === 'landscape' ? (
                       <MonitorPlay className="h-10 w-10 text-slate-300" />
-                    </div>
-                  ) : (
-                    <div className="flex h-32 w-20 items-center justify-center rounded-xl border border-dashed border-slate-600 bg-slate-900/70">
+                    ) : (
                       <Smartphone className="h-10 w-10 text-slate-300" />
-                    </div>
-                  )}
+                    )}
+                  </div>
                 </div>
 
                 {video.outputUrl && (
@@ -618,26 +659,24 @@ export default function CustomVideoPage() {
 
                 <div className="mt-auto flex flex-wrap gap-2">
                   {video.status === 'completed' ? (
-                    <>
-                      <Button
-                        variant="secondary"
-                        size="sm"
+                    <Link href={`/dashboard/custom_video/${video.id}/edit`} className="min-w-0">
+                      <Button 
+                        size="sm" 
                         className="min-w-0 whitespace-nowrap"
-                        onClick={() => setSelectedVideoToPlay(video)}
+                        onClick={(event) => event.stopPropagation()}
                       >
-                        <PlayCircle className="h-4 w-4" />
-                        Open
+                        <Edit className="h-4 w-4" />
+                        Edit
                       </Button>
-                      <Link href={`/dashboard/custom_video/${video.id}/edit`} className="min-w-0">
-                        <Button size="sm" className="min-w-0 whitespace-nowrap">
-                          <Edit className="h-4 w-4" />
-                          Edit
-                        </Button>
-                      </Link>
-                    </>
+                    </Link>
                   ) : (
                     <Link href={`/dashboard/custom_video/${video.id}/create`} className="min-w-0">
-                      <Button variant="secondary" size="sm" className="min-w-0 whitespace-nowrap">
+                      <Button 
+                        variant="secondary" 
+                        size="sm" 
+                        className="min-w-0 whitespace-nowrap"
+                        onClick={(event) => event.stopPropagation()}
+                      >
                         <Edit className="h-4 w-4" />
                         {video.status === 'draft' ? 'Continue' : 'Open'}
                       </Button>
@@ -655,17 +694,6 @@ export default function CustomVideoPage() {
                       Download
                     </Button>
                   </a>
-
-                  <button
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      setVideoToDelete(video);
-                    }}
-                    className="rounded-lg p-2 text-slate-500 transition-colors hover:bg-slate-800 hover:text-red-400"
-                    aria-label={`Delete ${video.title}`}
-                  >
-                    <Trash2 className="h-5 w-5" />
-                  </button>
                 </div>
               </CardContent>
             </Card>
