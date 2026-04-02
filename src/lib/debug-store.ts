@@ -103,18 +103,12 @@ export const useDebugStore = create<DebugState>()(
     {
       name: 'video-edit-debug', // localStorage key
       partialize: (state) => ({ calls: state.calls }), // Only persist calls, not isOpen
-      onRehydrateStorage: () => (state) => {
-        // Clear calls if rehydration fails due to quota issues
-        if (!state) {
-          console.warn('Failed to rehydrate debug store, clearing stored data');
-          set({ calls: [] });
-        }
-      },
       // Handle storage errors gracefully
       storage: {
         getItem: (name) => {
           try {
-            return localStorage.getItem(name);
+            const item = localStorage.getItem(name);
+            return item ? JSON.parse(item) : null;
           } catch (error) {
             console.warn('Failed to read from localStorage:', error);
             return null;
@@ -122,13 +116,10 @@ export const useDebugStore = create<DebugState>()(
         },
         setItem: (name, value) => {
           try {
-            localStorage.setItem(name, value);
+            localStorage.setItem(name, JSON.stringify(value));
           } catch (error) {
             console.warn('Failed to write to localStorage (quota exceeded):', error);
-            // Clear some old calls to free up space
-            set((state) => ({
-              calls: state.calls.slice(0, 10), // Keep only last 10 calls
-            }));
+            // Storage failed, but the store will continue to work in memory
           }
         },
         removeItem: (name) => {
