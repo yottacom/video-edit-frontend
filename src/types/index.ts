@@ -230,7 +230,7 @@ export interface ProjectBrollSceneInput {
   scene_type: string;
   start_ms: number;
   end_ms: number;
-  position: string;
+  position: string | null;
   image_prompt: string | null;
   motion_prompt: string | null;
   image_url: string | null;

@@ -3,28 +3,25 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { ArrowLeft, Clapperboard, Loader2, RefreshCw, Save, Sparkles, Wand2 } from 'lucide-react';
+import { AssetPickerModal } from '@/components/assets/AssetPickerModal';
 import { DashboardLayout } from '@/components/layout/DashboardLayout';
 import { InlineVideoPlayer } from '@/components/media/InlineVideoPlayer';
+import { BrollScenesEditor } from '@/components/projects/BrollScenesEditor';
 import { Card, CardContent } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
-import {
-  JsonEditorField,
-  MusicTrackPicker,
-  SubtitleStylePicker,
-} from '@/components/projects/ProjectEditorFields';
+import { SubtitleConfigEditor } from '@/components/projects/SubtitleConfigEditor';
+import { MusicTrackPicker, SubtitleStylePicker } from '@/components/projects/ProjectEditorFields';
 import { getApiErrorMessage, musicTracksApi, projectsApi, subtitleStylesApi } from '@/lib/api';
+import { LibraryAsset } from '@/lib/library-assets';
 import {
-  formatJsonInput,
-  parseJsonArrayInput,
-  parseJsonObjectOrNullInput,
+  buildProjectSubtitleConfigOverride,
+  DEFAULT_PROJECT_SUBTITLE_CONFIG,
+  ProjectSubtitleConfig,
+  resolveProjectSubtitleConfigState,
   sanitizeProjectBrollScenes,
+  SubtitleConfigMode,
 } from '@/lib/project-editing';
 import { EditProject, MusicTrack, ProjectBrollSceneInput, ProjectMainEditPayload, SubtitleStyle } from '@/types';
-
-interface JsonFieldErrors {
-  subtitleConfig: string | null;
-  brollScenes: string | null;
-}
 
 export default function ProjectMainEditPage() {
   const params = useParams();
@@ -37,12 +34,12 @@ export default function ProjectMainEditPage() {
   const [subtitleStyle, setSubtitleStyle] = useState('');
   const [selectedMusicId, setSelectedMusicId] = useState('');
   const [musicVolume, setMusicVolume] = useState(0.3);
-  const [subtitleConfigText, setSubtitleConfigText] = useState('');
-  const [brollScenesText, setBrollScenesText] = useState('[]');
-  const [jsonErrors, setJsonErrors] = useState<JsonFieldErrors>({
-    subtitleConfig: null,
-    brollScenes: null,
-  });
+  const [subtitleConfigMode, setSubtitleConfigMode] = useState<SubtitleConfigMode>('default');
+  const [subtitleConfig, setSubtitleConfig] = useState<ProjectSubtitleConfig>(
+    DEFAULT_PROJECT_SUBTITLE_CONFIG
+  );
+  const [brollScenes, setBrollScenes] = useState<ProjectBrollSceneInput[]>([]);
+  const [sceneBeingReplacedId, setSceneBeingReplacedId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [regenerating, setRegenerating] = useState(false);
@@ -54,12 +51,10 @@ export default function ProjectMainEditPage() {
     setSubtitleStyle(data.config.subtitle_style || '');
     setSelectedMusicId(data.config.music_track_id || '');
     setMusicVolume(typeof data.config.music_volume === 'number' ? data.config.music_volume : 0.3);
-    setSubtitleConfigText(formatJsonInput(data.config.subtitle_config_override));
-    setBrollScenesText(formatJsonInput(sanitizeProjectBrollScenes(data.scenes), '[]'));
-    setJsonErrors({
-      subtitleConfig: null,
-      brollScenes: null,
-    });
+    const subtitleConfigState = resolveProjectSubtitleConfigState(data.config.subtitle_config_override);
+    setSubtitleConfigMode(subtitleConfigState.mode);
+    setSubtitleConfig(subtitleConfigState.config);
+    setBrollScenes(sanitizeProjectBrollScenes(data.scenes));
   }, []);
 
   useEffect(() => {
@@ -88,47 +83,41 @@ export default function ProjectMainEditPage() {
   }, [applyProjectToForm, projectId]);
 
   const buildPayload = useCallback((): ProjectMainEditPayload | null => {
-    const nextErrors: JsonFieldErrors = {
-      subtitleConfig: null,
-      brollScenes: null,
-    };
-
-    let parsedSubtitleConfig: Record<string, unknown> | null = null;
-    let parsedBrollScenes: ProjectBrollSceneInput[] = [];
-
-    try {
-      parsedSubtitleConfig = parseJsonObjectOrNullInput(
-        subtitleConfigText,
-        'Subtitle config override'
-      );
-    } catch (error) {
-      nextErrors.subtitleConfig = error instanceof Error ? error.message : 'Invalid subtitle config JSON.';
-    }
-
-    try {
-      parsedBrollScenes = parseJsonArrayInput<ProjectBrollSceneInput>(
-        brollScenesText,
-        'B-roll scenes'
-      );
-    } catch (error) {
-      nextErrors.brollScenes = error instanceof Error ? error.message : 'Invalid B-roll scenes JSON.';
-    }
-
-    setJsonErrors(nextErrors);
-
-    if (nextErrors.subtitleConfig || nextErrors.brollScenes) {
-      setErrorMessage('Please fix the highlighted JSON fields before continuing.');
-      return null;
-    }
-
     return {
       music_track_id: selectedMusicId || null,
       music_volume: musicVolume,
       subtitle_style: subtitleStyle,
-      subtitle_config_override: parsedSubtitleConfig,
-      broll_scenes: parsedBrollScenes,
+      subtitle_config_override: buildProjectSubtitleConfigOverride(subtitleConfigMode, subtitleConfig),
+      broll_scenes: brollScenes,
     };
-  }, [brollScenesText, musicVolume, selectedMusicId, subtitleConfigText, subtitleStyle]);
+  }, [brollScenes, musicVolume, selectedMusicId, subtitleConfig, subtitleConfigMode, subtitleStyle]);
+
+  const handleReplaceSceneAsset = useCallback((sceneId: string) => {
+    setSceneBeingReplacedId(sceneId);
+  }, []);
+
+  const handleAssetSelected = useCallback((asset: LibraryAsset) => {
+    if (!sceneBeingReplacedId) {
+      return;
+    }
+
+    setBrollScenes((currentScenes) =>
+      currentScenes.map((scene) => {
+        if (scene.id !== sceneBeingReplacedId) {
+          return scene;
+        }
+
+        return {
+          ...scene,
+          image_url: asset.type === 'image' ? asset.url : null,
+          video_url: asset.type === 'video' ? asset.url : null,
+          status: 'completed',
+          error: null,
+        };
+      })
+    );
+    setSceneBeingReplacedId(null);
+  }, [sceneBeingReplacedId]);
 
   const handleSave = async () => {
     const payload = buildPayload();
@@ -298,27 +287,21 @@ export default function ProjectMainEditPage() {
 
           <Card>
             <CardContent className="p-6">
-              <JsonEditorField
-                label="Subtitle Config Override"
-                description="Optional JSON object forwarded to the backend as `subtitle_config_override`. Leave blank to send `null`."
-                value={subtitleConfigText}
-                onChange={setSubtitleConfigText}
-                error={jsonErrors.subtitleConfig}
-                minHeightClassName="min-h-[220px]"
-                placeholder={"{\n  \"font_size\": 42\n}"}
+              <SubtitleConfigEditor
+                mode={subtitleConfigMode}
+                value={subtitleConfig}
+                onModeChange={setSubtitleConfigMode}
+                onChange={setSubtitleConfig}
               />
             </CardContent>
           </Card>
 
           <Card>
             <CardContent className="p-6">
-              <JsonEditorField
-                label="B-Roll Scenes"
-                description="Editable JSON array for the `broll_scenes` payload. It starts from the scenes returned by the backend, trimmed to the editable fields."
-                value={brollScenesText}
-                onChange={setBrollScenesText}
-                error={jsonErrors.brollScenes}
-                placeholder="[]"
+              <BrollScenesEditor
+                scenes={brollScenes}
+                onChange={setBrollScenes}
+                onReplaceAsset={handleReplaceSceneAsset}
               />
             </CardContent>
           </Card>
@@ -344,7 +327,7 @@ export default function ProjectMainEditPage() {
                 </div>
                 <div className="rounded-2xl bg-slate-900/70 px-4 py-3">
                   <p className="text-sm text-slate-400">Scenes Available</p>
-                  <p className="mt-1 font-medium text-white">{project.scenes?.length || 0}</p>
+                  <p className="mt-1 font-medium text-white">{brollScenes.length}</p>
                 </div>
                 <div className="rounded-2xl bg-slate-900/70 px-4 py-3">
                   <p className="text-sm text-slate-400">Shorts Attached</p>
@@ -384,6 +367,13 @@ export default function ProjectMainEditPage() {
           </Card>
         </div>
       </div>
+
+      <AssetPickerModal
+        isOpen={!!sceneBeingReplacedId}
+        onClose={() => setSceneBeingReplacedId(null)}
+        onSelectAsset={handleAssetSelected}
+        allowedTypes={['image', 'video']}
+      />
     </DashboardLayout>
   );
 }

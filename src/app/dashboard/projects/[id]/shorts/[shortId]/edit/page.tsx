@@ -8,6 +8,7 @@ import { InlineVideoPlayer } from '@/components/media/InlineVideoPlayer';
 import { Card, CardContent } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
+import { SubtitleConfigEditor } from '@/components/projects/SubtitleConfigEditor';
 import {
   JsonEditorField,
   MusicTrackPicker,
@@ -15,14 +16,17 @@ import {
 } from '@/components/projects/ProjectEditorFields';
 import { getApiErrorMessage, musicTracksApi, projectsApi, subtitleStylesApi } from '@/lib/api';
 import {
+  buildProjectSubtitleConfigOverride,
+  DEFAULT_PROJECT_SUBTITLE_CONFIG,
   formatJsonInput,
   parseJsonArrayInput,
-  parseJsonObjectOrNullInput,
+  ProjectSubtitleConfig,
+  resolveProjectSubtitleConfigState,
+  SubtitleConfigMode,
 } from '@/lib/project-editing';
 import { EditProject, MusicTrack, ProjectShort, ProjectShortEditPayload, SubtitleStyle } from '@/types';
 
 interface JsonFieldErrors {
-  subtitleConfig: string | null;
   segments: string | null;
   duration: string | null;
 }
@@ -43,9 +47,11 @@ export default function ProjectShortEditPage() {
   const [subtitleStyle, setSubtitleStyle] = useState('');
   const [selectedMusicId, setSelectedMusicId] = useState('');
   const [musicVolume, setMusicVolume] = useState(0.3);
-  const [subtitleConfigText, setSubtitleConfigText] = useState('');
+  const [subtitleConfigMode, setSubtitleConfigMode] = useState<SubtitleConfigMode>('default');
+  const [subtitleConfig, setSubtitleConfig] = useState<ProjectSubtitleConfig>(
+    DEFAULT_PROJECT_SUBTITLE_CONFIG
+  );
   const [jsonErrors, setJsonErrors] = useState<JsonFieldErrors>({
-    subtitleConfig: null,
     segments: null,
     duration: null,
   });
@@ -76,9 +82,12 @@ export default function ProjectShortEditPage() {
           ? matchingShort.music_volume
           : data.config.music_volume
       );
-      setSubtitleConfigText(formatJsonInput(matchingShort.subtitle_config_override));
+      const subtitleConfigState = resolveProjectSubtitleConfigState(
+        matchingShort.subtitle_config_override
+      );
+      setSubtitleConfigMode(subtitleConfigState.mode);
+      setSubtitleConfig(subtitleConfigState.config);
       setJsonErrors({
-        subtitleConfig: null,
         segments: null,
         duration: null,
       });
@@ -113,22 +122,11 @@ export default function ProjectShortEditPage() {
 
   const buildPayload = useCallback((): ProjectShortEditPayload | null => {
     const nextErrors: JsonFieldErrors = {
-      subtitleConfig: null,
       segments: null,
       duration: null,
     };
 
-    let parsedSubtitleConfig: Record<string, unknown> | null = null;
     let parsedSegments: Record<string, unknown>[] = [];
-
-    try {
-      parsedSubtitleConfig = parseJsonObjectOrNullInput(
-        subtitleConfigText,
-        'Subtitle config override'
-      );
-    } catch (error) {
-      nextErrors.subtitleConfig = error instanceof Error ? error.message : 'Invalid subtitle config JSON.';
-    }
 
     try {
       parsedSegments = parseJsonArrayInput<Record<string, unknown>>(
@@ -146,7 +144,7 @@ export default function ProjectShortEditPage() {
 
     setJsonErrors(nextErrors);
 
-    if (nextErrors.subtitleConfig || nextErrors.segments || nextErrors.duration) {
+    if (nextErrors.segments || nextErrors.duration) {
       setErrorMessage('Please fix the highlighted fields before continuing.');
       return null;
     }
@@ -156,11 +154,11 @@ export default function ProjectShortEditPage() {
       segments: parsedSegments,
       total_duration_ms: parsedDuration,
       subtitle_style: subtitleStyle,
-      subtitle_config_override: parsedSubtitleConfig,
+      subtitle_config_override: buildProjectSubtitleConfigOverride(subtitleConfigMode, subtitleConfig),
       music_track_id: selectedMusicId || null,
       music_volume: musicVolume,
     };
-  }, [musicVolume, selectedMusicId, segmentsText, subtitleConfigText, subtitleStyle, title, totalDurationMs]);
+  }, [musicVolume, selectedMusicId, segmentsText, subtitleConfig, subtitleConfigMode, subtitleStyle, title, totalDurationMs]);
 
   const handleSave = async () => {
     const payload = buildPayload();
@@ -353,14 +351,11 @@ export default function ProjectShortEditPage() {
 
           <Card>
             <CardContent className="p-6">
-              <JsonEditorField
-                label="Subtitle Config Override"
-                description="Optional JSON object forwarded to the backend as `subtitle_config_override`. Leave blank to send `null`."
-                value={subtitleConfigText}
-                onChange={setSubtitleConfigText}
-                error={jsonErrors.subtitleConfig}
-                minHeightClassName="min-h-[220px]"
-                placeholder={"{\n  \"highlight_color\": \"#ff00ff\"\n}"}
+              <SubtitleConfigEditor
+                mode={subtitleConfigMode}
+                value={subtitleConfig}
+                onModeChange={setSubtitleConfigMode}
+                onChange={setSubtitleConfig}
               />
             </CardContent>
           </Card>
