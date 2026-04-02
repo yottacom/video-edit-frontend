@@ -37,7 +37,7 @@ import { DashboardLayout } from '@/components/layout/DashboardLayout';
 import { Card, CardContent } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { assetsApi, customVideosApi, getApiErrorMessage, musicTracksApi } from '@/lib/api';
-import { AssetGenerationJobResponse, AssetItem, AssetType, CustomVideo, CustomVideoScene, CustomVideoStatus, MusicTrack } from '@/types';
+import { AssetGenerationJobResponse, AssetItem, AssetType, CustomVideo, CustomVideoScene, CustomVideoStatus, MusicTrack, ElevenLabsVoice } from '@/types';
 
 // --- Subtitle Presets JSON ---
 const SUBTITLE_PRESETS = [
@@ -295,6 +295,18 @@ const AssetPicker: React.FC<{
   onAiAspectRatioChange: (value: '16:9' | '9:16' | '1:1') => void;
   onAiDurationSecondsChange: (value: string) => void;
   onGenerate: () => void;
+  selectedVoice: ElevenLabsVoice | null;
+  voices: ElevenLabsVoice[];
+  loadingVoices: boolean;
+  loadingMoreVoices: boolean;
+  voicesHasMore: boolean;
+  voicesSearchValue: string;
+  showVoicePicker: boolean;
+  onVoiceSelect: (voice: ElevenLabsVoice | null) => void;
+  onVoicesSearchChange: (value: string) => void;
+  onVoicePickerOpen: () => void;
+  onVoicePickerClose: () => void;
+  onVoicesScrollEnd: () => void;
 }> = ({
   isOpen,
   onClose,
@@ -335,6 +347,18 @@ const AssetPicker: React.FC<{
   onAiAspectRatioChange,
   onAiDurationSecondsChange,
   onGenerate,
+  selectedVoice,
+  voices,
+  loadingVoices,
+  loadingMoreVoices,
+  voicesHasMore,
+  voicesSearchValue,
+  showVoicePicker,
+  onVoiceSelect,
+  onVoicesSearchChange,
+  onVoicePickerOpen,
+  onVoicePickerClose,
+  onVoicesScrollEnd,
 }) => {
   const [showUploadDialog, setShowUploadDialog] = useState(false);
   const [showGenerateDialog, setShowGenerateDialog] = useState(false);
@@ -726,6 +750,23 @@ const AssetPicker: React.FC<{
                   />
                 </div>
 
+                {aiContentType === 'audio' && (
+                  <div>
+                    <label className="mb-2 block text-sm font-medium text-slate-300">Voice (ElevenLabs)</label>
+                    <button
+                      type="button"
+                      onClick={onVoicePickerOpen}
+                      disabled={isGenerationBusy}
+                      className="flex w-full items-center justify-between rounded-md border border-slate-700 bg-slate-800 px-3 py-2 text-left text-sm text-white focus:border-violet-500 focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      <span className={selectedVoice ? 'text-white' : 'text-slate-500'}>
+                        {selectedVoice ? `${selectedVoice.name} (${selectedVoice.gender}, ${selectedVoice.age})` : 'Select a voice...'}
+                      </span>
+                      <ChevronRight className="h-4 w-4 text-slate-500" />
+                    </button>
+                  </div>
+                )}
+
                 {aiContentType !== 'audio' && (
                   <div>
                     <label className="mb-2 block text-sm font-medium text-slate-300">Aspect Ratio</label>
@@ -798,6 +839,102 @@ const AssetPicker: React.FC<{
                   <Sparkles className="h-4 w-4" />
                   {generatingAI ? 'Starting...' : pollingGeneration ? 'Generating...' : `Generate ${aiContentType}`}
                 </Button>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
+      {/* Voice Picker Modal */}
+      {showVoicePicker && (
+        <div
+          className="fixed inset-0 z-[70] flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm"
+          onClick={onVoicePickerClose}
+        >
+          <Card
+            className="flex max-h-[90vh] w-full max-w-4xl flex-col overflow-hidden border-slate-700/70 bg-slate-900 shadow-2xl"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="relative border-b border-slate-700/50 p-6">
+              <h2 className="text-2xl font-semibold text-white">Select ElevenLabs Voice</h2>
+              <p className="mt-2 text-sm text-slate-400">
+                Search and browse voices, then choose one for AI audio generation.
+              </p>
+              <button
+                type="button"
+                onClick={onVoicePickerClose}
+                className="absolute right-4 top-4 rounded-full border border-white/10 bg-slate-800/50 p-2 text-slate-200 transition-colors hover:bg-slate-800 hover:text-white"
+                aria-label="Close voice picker"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <CardContent className="flex min-h-0 flex-1 flex-col gap-4 p-6">
+              <div className="relative">
+                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
+                <input
+                  placeholder="Search voices by name, accent, or description"
+                  value={voicesSearchValue}
+                  onChange={(event) => onVoicesSearchChange(event.target.value)}
+                  className="block w-full rounded-md border border-slate-700 bg-slate-800 py-2 pl-10 pr-3 text-sm text-white placeholder-slate-500 focus:border-violet-500 focus:outline-none"
+                />
+              </div>
+
+              <div
+                className="min-h-0 flex-1 space-y-3 overflow-y-auto pr-1"
+                onScroll={(event) => {
+                  const target = event.currentTarget;
+                  const distanceFromBottom = target.scrollHeight - target.scrollTop - target.clientHeight;
+                  if (distanceFromBottom < 120 && voicesHasMore && !loadingVoices && !loadingMoreVoices) {
+                    onVoicesScrollEnd();
+                  }
+                }}
+              >
+                {loadingVoices ? (
+                  <div className="flex items-center justify-center py-8">
+                    <Loader2 className="h-6 w-6 animate-spin text-violet-500" />
+                  </div>
+                ) : voices.length === 0 ? (
+                  <div className="flex flex-col items-center justify-center py-12 text-slate-500">
+                    <AudioLines className="h-12 w-12 mb-3 opacity-50" />
+                    <p>No voices found</p>
+                    <p className="text-sm text-slate-600">Try adjusting your search terms</p>
+                  </div>
+                ) : (
+                  voices.map((voice) => (
+                    <button
+                      key={voice.voice_id}
+                      onClick={() => {
+                        onVoiceSelect(voice);
+                        onVoicePickerClose();
+                      }}
+                      className="flex w-full items-center gap-4 rounded-lg border border-slate-700 bg-slate-800 p-4 text-left transition-all hover:border-violet-500 hover:bg-slate-750"
+                    >
+                      <div className="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-violet-500 to-indigo-500">
+                        <Mic className="h-5 w-5 text-white" />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <h3 className="font-semibold text-white">{voice.name}</h3>
+                        <p className="text-sm text-slate-400">
+                          {[voice.gender, voice.age, voice.accent || voice.language || voice.locale].filter(Boolean).join(' • ')}
+                        </p>
+                        {voice.description && (
+                          <p className="mt-1 text-xs text-slate-500 line-clamp-1">{voice.description}</p>
+                        )}
+                      </div>
+                      {selectedVoice?.voice_id === voice.voice_id && (
+                        <Check className="h-5 w-5 text-violet-400" />
+                      )}
+                    </button>
+                  ))
+                )}
+
+                {loadingMoreVoices && (
+                  <div className="flex items-center justify-center py-4">
+                    <Loader2 className="h-5 w-5 animate-spin text-violet-500" />
+                  </div>
+                )}
               </div>
             </CardContent>
           </Card>
@@ -1001,6 +1138,14 @@ export default function CreateVideoPage() {
   const [pickerPollingGeneration, setPickerPollingGeneration] = useState(false);
   const [pickerGenerationJob, setPickerGenerationJob] = useState<AssetGenerationJobResponse | null>(null);
   const [pickerGenerationError, setPickerGenerationError] = useState<string | null>(null);
+  const [pickerSelectedVoice, setPickerSelectedVoice] = useState<ElevenLabsVoice | null>(null);
+  const [pickerVoices, setPickerVoices] = useState<ElevenLabsVoice[]>([]);
+  const [pickerLoadingVoices, setPickerLoadingVoices] = useState(false);
+  const [pickerLoadingMoreVoices, setPickerLoadingMoreVoices] = useState(false);
+  const [pickerVoicesHasMore, setPickerVoicesHasMore] = useState(false);
+  const [pickerVoicesNextPageToken, setPickerVoicesNextPageToken] = useState<string | null>(null);
+  const [pickerVoicesSearch, setPickerVoicesSearch] = useState('');
+  const [pickerShowVoicePicker, setPickerShowVoicePicker] = useState(false);
   const [subtitleModalTarget, setSubtitleModalTarget] = useState<string | null>(null); 
   const [showFinalVideoModal, setShowFinalVideoModal] = useState(false);
   const pickerFileInputRef = useRef<HTMLInputElement>(null);
@@ -1655,6 +1800,7 @@ export default function CreateVideoPage() {
         text: pickerAiContentType === 'audio' ? pickerAiPrompt : undefined,
         aspect_ratio: pickerAiContentType === 'audio' ? undefined : pickerAiAspectRatio,
         duration_seconds: Number(pickerAiDurationSeconds) || 5,
+        elevenlabs_voice_id: pickerAiContentType === 'audio' && pickerSelectedVoice ? pickerSelectedVoice.voice_id : undefined,
       });
 
       if (response.asset) {
@@ -1689,7 +1835,39 @@ export default function CreateVideoPage() {
     pickerAiDurationSeconds,
     pickerAiPrompt,
     pickerPage,
+    pickerSelectedVoice,
   ]);
+
+  const loadPickerVoices = useCallback(async (mode: 'initial' | 'refresh' | 'more' = 'initial') => {
+    if (mode === 'initial') {
+      setPickerLoadingVoices(true);
+    } else if (mode === 'more') {
+      setPickerLoadingMoreVoices(true);
+    }
+
+    try {
+      const response = await assetsApi.listElevenLabsVoices({
+        page_size: 20,
+        next_page_token: mode === 'more' ? pickerVoicesNextPageToken || undefined : undefined,
+        search: pickerVoicesSearch || undefined,
+      });
+
+      if (mode === 'more') {
+        setPickerVoices((currentVoices) => [...currentVoices, ...response.items]);
+      } else {
+        setPickerVoices(response.items);
+      }
+
+      setPickerVoicesNextPageToken(response.next_page_token || null);
+      setPickerVoicesHasMore(response.has_more);
+    } catch (error) {
+      console.error('Failed to load ElevenLabs voices:', error);
+      alert(getApiErrorMessage(error, 'Failed to load ElevenLabs voices.'));
+    } finally {
+      setPickerLoadingVoices(false);
+      setPickerLoadingMoreVoices(false);
+    }
+  }, [pickerVoicesNextPageToken, pickerVoicesSearch]);
 
   useEffect(() => {
     const loadLibraryAssets = async () => {
@@ -2557,6 +2735,25 @@ export default function CreateVideoPage() {
         onAiAspectRatioChange={setPickerAiAspectRatio}
         onAiDurationSecondsChange={setPickerAiDurationSeconds}
         onGenerate={() => { void handlePickerGenerate(); }}
+        selectedVoice={pickerSelectedVoice}
+        voices={pickerVoices}
+        loadingVoices={pickerLoadingVoices}
+        loadingMoreVoices={pickerLoadingMoreVoices}
+        voicesHasMore={pickerVoicesHasMore}
+        voicesSearchValue={pickerVoicesSearch}
+        showVoicePicker={pickerShowVoicePicker}
+        onVoiceSelect={setPickerSelectedVoice}
+        onVoicesSearchChange={setPickerVoicesSearch}
+        onVoicePickerOpen={() => {
+          setPickerShowVoicePicker(true);
+          void loadPickerVoices('initial');
+        }}
+        onVoicePickerClose={() => setPickerShowVoicePicker(false)}
+        onVoicesScrollEnd={() => {
+          if (!pickerLoadingMoreVoices && pickerVoicesHasMore) {
+            void loadPickerVoices('more');
+          }
+        }}
       />
       
       <SubtitleModal 
