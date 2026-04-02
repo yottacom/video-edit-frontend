@@ -367,10 +367,17 @@ export const assetsApi = {
 
   generate: async (payload: {
     asset_type: AssetType;
+    title?: string;
     prompt?: string;
+    image_prompt?: string;
+    motion_prompt?: string;
     text?: string;
     aspect_ratio?: '16:9' | '9:16' | '1:1';
     duration_seconds?: number;
+    remove_background?: boolean;
+    base_image_asset_id?: string;
+    reference_image_asset_ids?: string[];
+    extra_metadata?: Record<string, unknown>;
     elevenlabs_voice_id?: string;
   }): Promise<AssetGenerationJobResponse> => {
     const res = await api.post('/api/assets/generate', payload);

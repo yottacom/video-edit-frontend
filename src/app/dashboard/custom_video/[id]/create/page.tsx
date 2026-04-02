@@ -36,6 +36,7 @@ import {
 import { DashboardLayout } from '@/components/layout/DashboardLayout';
 import { Card, CardContent } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
+import { Input } from '@/components/ui/Input';
 import { assetsApi, customVideosApi, getApiErrorMessage, musicTracksApi } from '@/lib/api';
 import { AssetGenerationJobResponse, AssetItem, AssetType, CustomVideo, CustomVideoScene, CustomVideoStatus, MusicTrack, ElevenLabsVoice } from '@/types';
 
@@ -79,12 +80,46 @@ const musicMoodStyles: Record<string, string> = {
 
 const waveformHeights = ['h-3', 'h-5', 'h-7', 'h-4', 'h-8', 'h-5', 'h-3', 'h-6'];
 
+function getVoiceMeta(voice: ElevenLabsVoice) {
+  return [voice.gender, voice.age, voice.accent || voice.language || voice.locale].filter(Boolean).join(' • ');
+}
+
+function getAssetTypeLabel(type: AssetType) {
+  switch (type) {
+    case 'image':
+      return 'Image';
+    case 'video':
+      return 'Video';
+    case 'audio':
+      return 'Audio';
+    default:
+      return type;
+  }
+}
+
+function buildGeneratedAssetTitle(prompt: string, assetType: AssetType) {
+  const trimmedPrompt = prompt.trim().replace(/\s+/g, ' ');
+
+  if (!trimmedPrompt) {
+    return assetType === 'image'
+      ? 'Generated Image'
+      : assetType === 'video'
+        ? 'Generated Video'
+        : 'Generated Audio';
+  }
+
+  return trimmedPrompt.length > 60
+    ? `${trimmedPrompt.slice(0, 57).trimEnd()}...`
+    : trimmedPrompt;
+}
+
 // --- Asset & Settings Data Types ---
 interface BaseAsset {
   id: string;
   title: string;
   type: AssetType;
   source: 'uploaded' | 'ai_generated';
+  status?: 'processing' | 'ready' | 'failed';
   url: string;
   duration_seconds: number;
   thumbnailUrl?: string;
@@ -154,6 +189,7 @@ function mapLibraryAsset(item: AssetItem): Asset {
     id: item.id,
     title: item.title,
     source: item.source_type === 'generated' ? 'ai_generated' : 'uploaded',
+    status: item.status,
     url: item.url || item.thumbnail_url || '#',
     duration_seconds: mappedDurationSeconds,
   } as const;
@@ -260,6 +296,7 @@ const AssetPicker: React.FC<{
   onClose: () => void;
   onSelectAsset: (asset: Asset) => void;
   assets: Asset[];
+  libraryAssets: Asset[];
   loading: boolean;
   refreshing: boolean;
   loadingMore: boolean;
@@ -272,9 +309,15 @@ const AssetPicker: React.FC<{
   uploadError: string | null;
   uploading: boolean;
   aiPrompt: string;
+  aiMotionPrompt: string;
   aiContentType: AssetType;
   aiAspectRatio: '16:9' | '9:16' | '1:1';
   aiDurationSeconds: string;
+  aiRemoveBackground: boolean;
+  videoGenerationMode: 'prompt' | 'base-image';
+  selectedReferenceImages: Asset[];
+  selectedBaseImage: Asset | null;
+  uploadingReferenceImages: boolean;
   generatingAI: boolean;
   pollingGeneration: boolean;
   generationJob: AssetGenerationJobResponse | null;
@@ -291,9 +334,15 @@ const AssetPicker: React.FC<{
   onClearFile: () => void;
   onUpload: () => void;
   onAiPromptChange: (value: string) => void;
+  onAiMotionPromptChange: (value: string) => void;
   onAiContentTypeChange: (value: AssetType) => void;
   onAiAspectRatioChange: (value: '16:9' | '9:16' | '1:1') => void;
   onAiDurationSecondsChange: (value: string) => void;
+  onAiRemoveBackgroundChange: (value: boolean) => void;
+  onVideoGenerationModeChange: (value: 'prompt' | 'base-image') => void;
+  onSelectedReferenceImagesChange: (assets: Asset[]) => void;
+  onSelectedBaseImageChange: (asset: Asset | null) => void;
+  onReferenceImagesUpload: (files: File[]) => void;
   onGenerate: () => void;
   selectedVoice: ElevenLabsVoice | null;
   voices: ElevenLabsVoice[];
@@ -312,6 +361,7 @@ const AssetPicker: React.FC<{
   onClose,
   onSelectAsset,
   assets,
+  libraryAssets,
   loading,
   refreshing,
   loadingMore,
@@ -324,9 +374,15 @@ const AssetPicker: React.FC<{
   uploadError,
   uploading,
   aiPrompt,
+  aiMotionPrompt,
   aiContentType,
   aiAspectRatio,
   aiDurationSeconds,
+  aiRemoveBackground,
+  videoGenerationMode,
+  selectedReferenceImages,
+  selectedBaseImage,
+  uploadingReferenceImages,
   generatingAI,
   pollingGeneration,
   generationJob,
@@ -343,9 +399,15 @@ const AssetPicker: React.FC<{
   onClearFile,
   onUpload,
   onAiPromptChange,
+  onAiMotionPromptChange,
   onAiContentTypeChange,
   onAiAspectRatioChange,
   onAiDurationSecondsChange,
+  onAiRemoveBackgroundChange,
+  onVideoGenerationModeChange,
+  onSelectedReferenceImagesChange,
+  onSelectedBaseImageChange,
+  onReferenceImagesUpload,
   onGenerate,
   selectedVoice,
   voices,
@@ -362,15 +424,52 @@ const AssetPicker: React.FC<{
 }) => {
   const [showUploadDialog, setShowUploadDialog] = useState(false);
   const [showGenerateDialog, setShowGenerateDialog] = useState(false);
+  const [showReferencePickerDialog, setShowReferencePickerDialog] = useState(false);
+  const [showBaseImagePickerDialog, setShowBaseImagePickerDialog] = useState(false);
+  const [assetSelectionSearch, setAssetSelectionSearch] = useState('');
   const [previewAsset, setPreviewAsset] = useState<Asset | null>(null);
+  const referenceUploadInputRef = useRef<HTMLInputElement>(null);
   const filteredAssets = assets.filter((asset) => !allowedTypes || allowedTypes.includes(asset.type));
   const availableAssetTypes = allowedTypes && allowedTypes.length > 0
     ? allowedTypes
     : (['image', 'video', 'audio'] as AssetType[]);
   const isGenerationBusy = generatingAI || pollingGeneration;
+  const filteredImageLibraryAssets = libraryAssets.filter((asset) => {
+    if (asset.type !== 'image') {
+      return false;
+    }
+
+    if (!assetSelectionSearch.trim()) {
+      return true;
+    }
+
+    return asset.title.toLowerCase().includes(assetSelectionSearch.trim().toLowerCase());
+  });
+  const isVideoUsingBaseImage = aiContentType === 'video' && videoGenerationMode === 'base-image';
+  const hasPendingReferenceImages = selectedReferenceImages.some((asset) => asset.status !== 'ready');
+  const hasPendingBaseImage = !!selectedBaseImage && selectedBaseImage.status !== 'ready';
+  const canGenerate =
+    !isGenerationBusy &&
+    !uploadingReferenceImages &&
+    !hasPendingReferenceImages &&
+    !hasPendingBaseImage &&
+    (
+      aiContentType === 'image'
+        ? aiPrompt.trim().length > 0
+        : aiContentType === 'video'
+          ? (
+              isVideoUsingBaseImage
+                ? !!selectedBaseImage && aiMotionPrompt.trim().length > 0
+                : aiPrompt.trim().length > 0 && aiMotionPrompt.trim().length > 0
+            )
+          : aiPrompt.trim().length > 0
+    );
   const handleClosePicker = () => {
     setShowUploadDialog(false);
     setShowGenerateDialog(false);
+    setShowReferencePickerDialog(false);
+    setShowBaseImagePickerDialog(false);
+    setAssetSelectionSearch('');
     setPreviewAsset(null);
     onClose();
   };
@@ -537,6 +636,14 @@ const AssetPicker: React.FC<{
 
                   <CardContent className="space-y-2 p-4">
                     <h4 className="truncate text-sm font-semibold text-white">{asset.title}</h4>
+                    {asset.type === 'audio' && asset.url && (
+                      <div
+                        className="rounded-lg border border-slate-800 bg-slate-900/80 p-2"
+                        onClick={(event) => event.stopPropagation()}
+                      >
+                        <audio controls preload="metadata" src={asset.url} className="w-full" />
+                      </div>
+                    )}
                     <div className="flex items-center justify-between gap-3 text-xs text-slate-400">
                       <span>{asset.type === 'image' ? 'Still image' : formatDuration(asset.duration_seconds)}</span>
                       <div className="flex items-center gap-3">
@@ -706,139 +813,784 @@ const AssetPicker: React.FC<{
 
       {showGenerateDialog && (
         <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm" onClick={() => setShowGenerateDialog(false)}>
-          <Card className="w-full max-w-xl border-slate-700/70 bg-slate-900 shadow-2xl" onClick={(e) => e.stopPropagation()}>
-            <CardContent className="p-6">
-              <div className="mb-5 flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-fuchsia-500/10 text-fuchsia-300">
-                    <Sparkles className="h-5 w-5" />
-                  </div>
-                  <div>
-                    <h3 className="text-xl font-semibold text-white">Generate Asset</h3>
-                    <p className="text-sm text-slate-400">Create a new asset and add it back into this picker.</p>
-                  </div>
-                </div>
-                <button onClick={() => setShowGenerateDialog(false)} className="rounded-full border border-white/10 bg-slate-800/50 p-2 text-slate-200 hover:bg-slate-800 hover:text-white">
+          <Card className="flex max-h-[calc(100vh-2rem)] w-full max-w-xl flex-col overflow-hidden border-slate-700/70 bg-slate-900 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+            <CardContent className="flex min-h-0 flex-1 flex-col p-0">
+              <input
+                ref={referenceUploadInputRef}
+                type="file"
+                accept="image/*"
+                multiple
+                className="hidden"
+                onChange={(event) => {
+                  const files = Array.from(event.target.files || []);
+                  if (files.length > 0) {
+                    onReferenceImagesUpload(files);
+                  }
+                  event.target.value = '';
+                }}
+              />
+
+              <div className="flex items-center justify-between border-b border-slate-700/50 px-6 py-5">
+                <h2 className="text-xl font-semibold text-white">AI Generate Asset</h2>
+                <button
+                  type="button"
+                  onClick={() => setShowGenerateDialog(false)}
+                  className="rounded-full border border-white/10 bg-slate-800/50 p-2 text-slate-200 transition-colors hover:bg-slate-800 hover:text-white"
+                  aria-label="Close AI generate modal"
+                >
                   <X className="h-5 w-5" />
                 </button>
               </div>
 
-              <div className="space-y-4">
-                <div>
-                  <label className="mb-2 block text-sm font-medium text-slate-300">Content Type</label>
-                  <select
-                    value={aiContentType}
-                    onChange={(event) => onAiContentTypeChange(event.target.value as AssetType)}
-                    disabled={isGenerationBusy}
-                    className="block w-full rounded-md border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-white focus:border-violet-500 focus:outline-none"
-                  >
-                    {availableAssetTypes.includes('image') && <option value="image">Image</option>}
-                    {availableAssetTypes.includes('video') && <option value="video">Video</option>}
-                    {availableAssetTypes.includes('audio') && <option value="audio">Audio</option>}
-                  </select>
-                </div>
-
-                <div>
-                  <label className="mb-2 block text-sm font-medium text-slate-300">Prompt</label>
-                  <textarea
-                    value={aiPrompt}
-                    onChange={(event) => onAiPromptChange(event.target.value)}
-                    rows={4}
-                    disabled={isGenerationBusy}
-                    placeholder={`Describe the ${aiContentType} you want to generate`}
-                    className="block w-full rounded-md border border-slate-700 bg-slate-800 p-3 text-sm text-white placeholder-slate-500 focus:border-violet-500 focus:outline-none"
-                  />
-                </div>
-
-                {aiContentType === 'audio' && (
+              <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
+                <div className="space-y-4 pr-1">
                   <div>
-                    <label className="mb-2 block text-sm font-medium text-slate-300">Voice (ElevenLabs)</label>
-                    <button
-                      type="button"
-                      onClick={onVoicePickerOpen}
-                      disabled={isGenerationBusy}
-                      className="flex w-full items-center justify-between rounded-md border border-slate-700 bg-slate-800 px-3 py-2 text-left text-sm text-white focus:border-violet-500 focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
-                    >
-                      <span className={selectedVoice ? 'text-white' : 'text-slate-500'}>
-                        {selectedVoice ? `${selectedVoice.name} (${selectedVoice.gender}, ${selectedVoice.age})` : 'Select a voice...'}
-                      </span>
-                      <ChevronRight className="h-4 w-4 text-slate-500" />
-                    </button>
+                    <label htmlFor="picker-ai-content-type" className="mb-2 block text-sm font-medium text-slate-300">Content Type</label>
+                    <div className="relative">
+                      <select
+                        id="picker-ai-content-type"
+                        value={aiContentType}
+                        onChange={(event) => onAiContentTypeChange(event.target.value as AssetType)}
+                        disabled={isGenerationBusy}
+                        className="block w-full appearance-none rounded-md border border-slate-700 bg-slate-800 py-2 pl-3 pr-10 text-base text-white placeholder-slate-500 focus:border-violet-500 focus:ring-violet-500 sm:text-sm"
+                      >
+                        {availableAssetTypes.includes('image') && <option value="image">Image</option>}
+                        {availableAssetTypes.includes('video') && <option value="video">Video</option>}
+                        {availableAssetTypes.includes('audio') && <option value="audio">Audio</option>}
+                      </select>
+                      <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2 text-slate-400">
+                        <svg className="h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 9l4-4 4 4m0 6l-4 4-4-4" />
+                        </svg>
+                      </div>
+                    </div>
                   </div>
-                )}
 
-                {aiContentType !== 'audio' && (
-                  <div>
-                    <label className="mb-2 block text-sm font-medium text-slate-300">Aspect Ratio</label>
-                    <select
-                      value={aiAspectRatio}
-                      onChange={(event) => onAiAspectRatioChange(event.target.value as '16:9' | '9:16' | '1:1')}
-                      disabled={isGenerationBusy}
-                      className="block w-full rounded-md border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-white focus:border-violet-500 focus:outline-none"
-                    >
-                      <option value="1:1">1:1</option>
-                      <option value="16:9">16:9</option>
-                      <option value="9:16">9:16</option>
-                    </select>
-                  </div>
-                )}
+                  {(aiContentType === 'image' || aiContentType === 'audio') && (
+                    <div>
+                      <label htmlFor="picker-ai-prompt" className="mb-2 block text-sm font-medium text-slate-300">
+                        {aiContentType === 'audio' ? 'What should the voice say?' : 'Describe what you want to create'}
+                      </label>
+                      <textarea
+                        id="picker-ai-prompt"
+                        value={aiPrompt}
+                        onChange={(event) => onAiPromptChange(event.target.value)}
+                        rows={4}
+                        disabled={isGenerationBusy}
+                        placeholder={
+                          aiContentType === 'audio'
+                            ? 'Enter the text you want converted to audio'
+                            : `Describe the ${aiContentType} you want to generate`
+                        }
+                        className="block w-full rounded-md border border-slate-700 bg-slate-800 p-3 text-base text-white placeholder-slate-500 shadow-sm focus:border-violet-500 focus:ring-violet-500 sm:text-sm"
+                      />
+                    </div>
+                  )}
 
-                <div>
-                  <label className="mb-2 block text-sm font-medium text-slate-300">Duration (seconds)</label>
+                  {aiContentType !== 'audio' && (
+                    <div>
+                      <label htmlFor="picker-ai-aspect-ratio" className="mb-2 block text-sm font-medium text-slate-300">Aspect Ratio</label>
+                      <select
+                        id="picker-ai-aspect-ratio"
+                        value={aiAspectRatio}
+                        onChange={(event) => onAiAspectRatioChange(event.target.value as '16:9' | '9:16' | '1:1')}
+                        disabled={isGenerationBusy}
+                        className="block w-full rounded-md border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-white focus:border-violet-500 focus:ring-violet-500"
+                      >
+                        <option value="1:1">1:1</option>
+                        <option value="16:9">16:9</option>
+                        <option value="9:16">9:16</option>
+                      </select>
+                    </div>
+                  )}
+
+                  {aiContentType === 'image' && (
+                    <div className="space-y-4 rounded-2xl border border-slate-800 bg-slate-950/70 p-4">
+                      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                        <div className="min-w-0">
+                          <p className="text-sm font-medium text-white">Reference Images</p>
+                          <p className="mt-1 max-w-md text-xs leading-5 text-slate-400">
+                            Add optional image assets to guide the output. You can mix uploaded and existing assets.
+                          </p>
+                        </div>
+                        <span className="w-fit rounded-full border border-slate-700 bg-slate-900 px-2.5 py-1 text-xs text-slate-300">
+                          {selectedReferenceImages.length} selected
+                        </span>
+                      </div>
+
+                      {selectedReferenceImages.length > 0 ? (
+                        <div className="grid gap-3 sm:grid-cols-2">
+                          {selectedReferenceImages.map((asset) => (
+                            <div
+                              key={asset.id}
+                              className="flex items-center gap-3 rounded-xl border border-slate-800 bg-slate-900/80 p-3"
+                            >
+                              <div className="h-14 w-14 shrink-0 overflow-hidden rounded-lg bg-slate-950">
+                                {asset.url ? (
+                                  <img
+                                    src={asset.thumbnailUrl || asset.url || ''}
+                                    alt={asset.title}
+                                    className="h-full w-full object-cover"
+                                  />
+                                ) : (
+                                  <div className="flex h-full items-center justify-center">
+                                    <ImageIcon className="h-5 w-5 text-slate-500" />
+                                  </div>
+                                )}
+                              </div>
+                              <div className="min-w-0 flex-1">
+                                <p className="truncate text-sm font-medium text-white">{asset.title}</p>
+                                <p className="mt-1 text-xs text-slate-400">
+                                  {asset.status === 'ready' ? 'Ready to use' : `Status: ${asset.status}`}
+                                </p>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  onSelectedReferenceImagesChange(
+                                    selectedReferenceImages.filter((currentAsset) => currentAsset.id !== asset.id)
+                                  )
+                                }
+                                className="rounded-full border border-slate-700 bg-slate-950 p-2 text-slate-300 transition-colors hover:border-slate-600 hover:text-white"
+                                aria-label={`Remove ${asset.title}`}
+                                disabled={isGenerationBusy || uploadingReferenceImages}
+                              >
+                                <X className="h-4 w-4" />
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="rounded-xl border border-dashed border-slate-700 bg-slate-900/40 p-4 text-sm leading-6 text-slate-400">
+                          No reference images selected. The prompt alone will be used.
+                        </div>
+                      )}
+
+                      <div className="grid gap-3 sm:grid-cols-2">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          onClick={() => setShowReferencePickerDialog(true)}
+                          disabled={isGenerationBusy || uploadingReferenceImages}
+                          className="w-full justify-center"
+                        >
+                          <ImageIcon className="h-4 w-4" />
+                          Select From Assets
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          onClick={() => referenceUploadInputRef.current?.click()}
+                          loading={uploadingReferenceImages}
+                          disabled={isGenerationBusy || uploadingReferenceImages}
+                          className="w-full justify-center"
+                        >
+                          <Upload className="h-4 w-4" />
+                          Upload Reference Images
+                        </Button>
+                      </div>
+
+                      <label className="flex items-start gap-3 rounded-xl border border-slate-800 bg-slate-900/70 p-4">
+                        <input
+                          type="checkbox"
+                          checked={aiRemoveBackground}
+                          onChange={(event) => onAiRemoveBackgroundChange(event.target.checked)}
+                          disabled={isGenerationBusy}
+                          className="mt-1 h-4 w-4 shrink-0 rounded border-slate-600 bg-slate-950 text-violet-500 focus:ring-violet-500"
+                        />
+                        <div className="min-w-0">
+                          <p className="text-sm font-medium text-white">Remove background</p>
+                          <p className="mt-1 text-xs leading-5 text-slate-400">
+                            Turn this on when you want the generated image delivered as a clean cutout.
+                          </p>
+                        </div>
+                      </label>
+                    </div>
+                  )}
+
+                  {aiContentType === 'video' && (
+                    <div className="space-y-4">
+                      <div>
+                        <label className="mb-2 block text-sm font-medium text-slate-300">Video Source</label>
+                        <div className="grid gap-3 sm:grid-cols-2">
+                          <button
+                            type="button"
+                            onClick={() => onVideoGenerationModeChange('prompt')}
+                            disabled={isGenerationBusy}
+                            className={`rounded-xl border p-4 text-left transition-all ${
+                              videoGenerationMode === 'prompt'
+                                ? 'border-violet-500 bg-violet-500/10'
+                                : 'border-slate-700 bg-slate-800 hover:border-slate-600'
+                            }`}
+                          >
+                            <p className="text-sm font-medium text-white">Generate From Prompt</p>
+                            <p className="mt-1 text-xs leading-5 text-slate-400">
+                              Describe the visual, optionally add reference images, then animate it.
+                            </p>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => onVideoGenerationModeChange('base-image')}
+                            disabled={isGenerationBusy}
+                            className={`rounded-xl border p-4 text-left transition-all ${
+                              videoGenerationMode === 'base-image'
+                                ? 'border-violet-500 bg-violet-500/10'
+                                : 'border-slate-700 bg-slate-800 hover:border-slate-600'
+                            }`}
+                          >
+                            <p className="text-sm font-medium text-white">Animate Base Image</p>
+                            <p className="mt-1 text-xs leading-5 text-slate-400">
+                              Pick an existing image asset, then provide the motion prompt only.
+                            </p>
+                          </button>
+                        </div>
+                      </div>
+
+                      {videoGenerationMode === 'base-image' ? (
+                        <div className="space-y-4 rounded-2xl border border-slate-800 bg-slate-950/70 p-4">
+                          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                            <div className="min-w-0">
+                              <p className="text-sm font-medium text-white">Base Image</p>
+                              <p className="mt-1 max-w-md text-xs leading-5 text-slate-400">
+                                Select the image asset you want to animate into a video.
+                              </p>
+                            </div>
+                            {selectedBaseImage && (
+                              <span className="w-fit rounded-full border border-slate-700 bg-slate-900 px-2.5 py-1 text-xs text-slate-300">
+                                Selected
+                              </span>
+                            )}
+                          </div>
+
+                          {selectedBaseImage ? (
+                            <div className="flex items-center gap-3 rounded-xl border border-slate-800 bg-slate-900/80 p-3">
+                              <div className="h-16 w-16 shrink-0 overflow-hidden rounded-lg bg-slate-950">
+                                {selectedBaseImage.url ? (
+                                  <img
+                                    src={selectedBaseImage.thumbnailUrl || selectedBaseImage.url || ''}
+                                    alt={selectedBaseImage.title}
+                                    className="h-full w-full object-cover"
+                                  />
+                                ) : (
+                                  <div className="flex h-full items-center justify-center">
+                                    <ImageIcon className="h-5 w-5 text-slate-500" />
+                                  </div>
+                                )}
+                              </div>
+                              <div className="min-w-0 flex-1">
+                                <p className="truncate text-sm font-medium text-white">{selectedBaseImage.title}</p>
+                                <p className="mt-1 text-xs text-slate-400">
+                                  {selectedBaseImage.status === 'ready' ? 'Ready to animate' : `Status: ${selectedBaseImage.status}`}
+                                </p>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => onSelectedBaseImageChange(null)}
+                                className="rounded-full border border-slate-700 bg-slate-950 p-2 text-slate-300 transition-colors hover:border-slate-600 hover:text-white"
+                                aria-label={`Remove ${selectedBaseImage.title}`}
+                                disabled={isGenerationBusy}
+                              >
+                                <X className="h-4 w-4" />
+                              </button>
+                            </div>
+                          ) : (
+                            <div className="rounded-xl border border-dashed border-slate-700 bg-slate-900/40 p-4 text-sm leading-6 text-slate-400">
+                              No base image selected yet.
+                            </div>
+                          )}
+
+                          <div className="flex flex-wrap gap-3">
+                            <Button
+                              type="button"
+                              variant="outline"
+                              onClick={() => setShowBaseImagePickerDialog(true)}
+                              disabled={isGenerationBusy}
+                            >
+                              <ImageIcon className="h-4 w-4" />
+                              {selectedBaseImage ? 'Change Base Image' : 'Select Base Image'}
+                            </Button>
+                          </div>
+                        </div>
+                      ) : (
+                        <>
+                          <div>
+                            <label htmlFor="picker-ai-video-image-prompt" className="mb-2 block text-sm font-medium text-slate-300">
+                              Base Image Prompt
+                            </label>
+                            <textarea
+                              id="picker-ai-video-image-prompt"
+                              placeholder="Describe the base image you want to generate for this video"
+                              value={aiPrompt}
+                              onChange={(event) => onAiPromptChange(event.target.value)}
+                              disabled={isGenerationBusy}
+                              rows={4}
+                              className="block w-full rounded-md border border-slate-700 bg-slate-800 p-3 text-base text-white placeholder-slate-500 shadow-sm focus:border-violet-500 focus:ring-violet-500 sm:text-sm"
+                            />
+                          </div>
+
+                          <div className="space-y-4 rounded-2xl border border-slate-800 bg-slate-950/70 p-4">
+                            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                              <div className="min-w-0">
+                                <p className="text-sm font-medium text-white">Reference Images</p>
+                                <p className="mt-1 max-w-md text-xs leading-5 text-slate-400">
+                                  Add optional image assets to guide the generated base image before animation.
+                                </p>
+                              </div>
+                              <span className="w-fit rounded-full border border-slate-700 bg-slate-900 px-2.5 py-1 text-xs text-slate-300">
+                                {selectedReferenceImages.length} selected
+                              </span>
+                            </div>
+
+                            {selectedReferenceImages.length > 0 ? (
+                              <div className="grid gap-3 sm:grid-cols-2">
+                                {selectedReferenceImages.map((asset) => (
+                                  <div
+                                    key={asset.id}
+                                    className="flex items-center gap-3 rounded-xl border border-slate-800 bg-slate-900/80 p-3"
+                                  >
+                                    <div className="h-14 w-14 shrink-0 overflow-hidden rounded-lg bg-slate-950">
+                                      {asset.url ? (
+                                        <img
+                                          src={asset.thumbnailUrl || asset.url || ''}
+                                          alt={asset.title}
+                                          className="h-full w-full object-cover"
+                                        />
+                                      ) : (
+                                        <div className="flex h-full items-center justify-center">
+                                          <ImageIcon className="h-5 w-5 text-slate-500" />
+                                        </div>
+                                      )}
+                                    </div>
+                                    <div className="min-w-0 flex-1">
+                                      <p className="truncate text-sm font-medium text-white">{asset.title}</p>
+                                      <p className="mt-1 text-xs text-slate-400">
+                                        {asset.status === 'ready' ? 'Ready to use' : `Status: ${asset.status}`}
+                                      </p>
+                                    </div>
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        onSelectedReferenceImagesChange(
+                                          selectedReferenceImages.filter((currentAsset) => currentAsset.id !== asset.id)
+                                        )
+                                      }
+                                      className="rounded-full border border-slate-700 bg-slate-950 p-2 text-slate-300 transition-colors hover:border-slate-600 hover:text-white"
+                                      aria-label={`Remove ${asset.title}`}
+                                      disabled={isGenerationBusy || uploadingReferenceImages}
+                                    >
+                                      <X className="h-4 w-4" />
+                                    </button>
+                                  </div>
+                                ))}
+                              </div>
+                            ) : (
+                              <div className="rounded-xl border border-dashed border-slate-700 bg-slate-900/40 p-4 text-sm leading-6 text-slate-400">
+                                No reference images selected. The base image prompt alone will be used.
+                              </div>
+                            )}
+
+                            <div className="grid gap-3 sm:grid-cols-2">
+                              <Button
+                                type="button"
+                                variant="outline"
+                                onClick={() => setShowReferencePickerDialog(true)}
+                                disabled={isGenerationBusy || uploadingReferenceImages}
+                                className="w-full justify-center"
+                              >
+                                <ImageIcon className="h-4 w-4" />
+                                Select From Assets
+                              </Button>
+                              <Button
+                                type="button"
+                                variant="secondary"
+                                onClick={() => referenceUploadInputRef.current?.click()}
+                                loading={uploadingReferenceImages}
+                                disabled={isGenerationBusy || uploadingReferenceImages}
+                                className="w-full justify-center"
+                              >
+                                <Upload className="h-4 w-4" />
+                                Upload Reference Images
+                              </Button>
+                            </div>
+                          </div>
+                        </>
+                      )}
+
+                      <div>
+                        <label htmlFor="picker-ai-motion-prompt" className="mb-2 block text-sm font-medium text-slate-300">
+                          Motion Prompt
+                        </label>
+                        <textarea
+                          id="picker-ai-motion-prompt"
+                          placeholder={
+                            videoGenerationMode === 'base-image'
+                              ? 'Describe how the selected base image should move'
+                              : 'Describe the camera and scene motion for the generated video'
+                          }
+                          value={aiMotionPrompt}
+                          onChange={(event) => onAiMotionPromptChange(event.target.value)}
+                          disabled={isGenerationBusy}
+                          rows={3}
+                          className="block w-full rounded-md border border-slate-700 bg-slate-800 p-3 text-base text-white placeholder-slate-500 shadow-sm focus:border-violet-500 focus:ring-violet-500 sm:text-sm"
+                        />
+                      </div>
+                    </div>
+                  )}
+
                   {aiContentType === 'video' ? (
-                    <select
-                      value={aiDurationSeconds}
-                      onChange={(event) => onAiDurationSecondsChange(event.target.value)}
-                      disabled={isGenerationBusy}
-                      className="block w-full rounded-md border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-white focus:border-violet-500 focus:outline-none"
-                    >
-                      <option value="5">5 seconds</option>
-                      <option value="10">10 seconds</option>
-                    </select>
-                  ) : (
-                    <input
+                    <div>
+                      <label htmlFor="picker-ai-video-duration" className="mb-2 block text-sm font-medium text-slate-300">Duration (seconds)</label>
+                      <select
+                        id="picker-ai-video-duration"
+                        value={aiDurationSeconds}
+                        onChange={(event) => onAiDurationSecondsChange(event.target.value)}
+                        disabled={isGenerationBusy}
+                        className="block w-full rounded-md border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-white focus:border-violet-500 focus:ring-violet-500"
+                      >
+                        <option value="5">5 seconds</option>
+                        <option value="10">10 seconds</option>
+                      </select>
+                    </div>
+                  ) : aiContentType === 'audio' ? (
+                    <Input
+                      label="Duration (seconds)"
                       type="number"
                       min="1"
                       step="1"
                       value={aiDurationSeconds}
                       onChange={(event) => onAiDurationSecondsChange(event.target.value)}
                       disabled={isGenerationBusy}
-                      className="block w-full rounded-md border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-white focus:border-violet-500 focus:outline-none"
                     />
+                  ) : null}
+
+                  {aiContentType === 'audio' && (
+                    <div className="space-y-3">
+                      <div className="flex items-center justify-between">
+                        <label className="block text-sm font-medium text-slate-300">ElevenLabs Voice</label>
+                        {selectedVoice && (
+                          <button
+                            type="button"
+                            onClick={() => onVoiceSelect(null)}
+                            className="text-xs font-medium text-slate-400 transition-colors hover:text-white"
+                            disabled={isGenerationBusy}
+                          >
+                            Clear
+                          </button>
+                        )}
+                      </div>
+
+                      {selectedVoice ? (
+                        <div className="rounded-xl border border-violet-500/30 bg-violet-500/10 p-4">
+                          <div className="flex items-start justify-between gap-4">
+                            <div className="min-w-0">
+                              <p className="truncate text-sm font-semibold text-white">{selectedVoice.name}</p>
+                              {(selectedVoice.description || getVoiceMeta(selectedVoice)) && (
+                                <p className="mt-1 text-xs text-slate-300">
+                                  {selectedVoice.description || getVoiceMeta(selectedVoice)}
+                                </p>
+                              )}
+                            </div>
+                            <span className="rounded-full border border-violet-500/30 bg-violet-500/15 px-2 py-1 text-[11px] font-medium text-violet-200">
+                              Selected
+                            </span>
+                          </div>
+                          <div className="mt-3 flex flex-wrap gap-2">
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              onClick={onVoicePickerOpen}
+                              disabled={isGenerationBusy}
+                            >
+                              Change Voice
+                            </Button>
+                          </div>
+                        </div>
+                      ) : (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          className="w-full justify-between"
+                          onClick={onVoicePickerOpen}
+                          disabled={isGenerationBusy}
+                        >
+                          <span>Select ElevenLabs Voice</span>
+                          <ChevronRight className="h-4 w-4" />
+                        </Button>
+                      )}
+                    </div>
+                  )}
+
+                  {generationJob && (
+                    <div className="rounded-xl border border-violet-500/20 bg-violet-500/10 p-4">
+                      <div className="flex items-center justify-between gap-3">
+                        <div>
+                          <p className="text-sm font-semibold text-white">Generation Progress</p>
+                          <p className="mt-1 text-xs text-slate-300">Status: {generationJob.status}</p>
+                        </div>
+                        <span className="rounded-full border border-violet-500/20 bg-slate-950/50 px-3 py-1 text-sm font-medium text-violet-200">
+                          {generationJob.progress ?? 0}%
+                        </span>
+                      </div>
+
+                      <div className="mt-3 h-2 w-full overflow-hidden rounded-full bg-slate-800">
+                        <div
+                          className="h-full rounded-full bg-gradient-to-r from-violet-500 to-indigo-500 transition-all duration-500"
+                          style={{ width: `${Math.min(100, Math.max(0, generationJob.progress ?? 0))}%` }}
+                        />
+                      </div>
+
+                      {generationJob.error && (
+                        <p className="mt-3 text-sm text-red-300">{generationJob.error}</p>
+                      )}
+                    </div>
+                  )}
+
+                  {generationError && (
+                    <div className="rounded-xl border border-red-500/20 bg-red-500/10 p-4">
+                      <p className="text-sm font-medium text-red-200">{generationError}</p>
+                    </div>
                   )}
                 </div>
+              </div>
 
-                {generationJob && (
-                  <div className="rounded-xl border border-violet-500/20 bg-violet-500/10 p-4">
-                    <div className="flex items-center justify-between gap-3">
-                      <div>
-                        <p className="text-sm font-semibold text-white">Generation Progress</p>
-                        <p className="mt-1 text-xs text-slate-300">Status: {generationJob.status}</p>
-                      </div>
-                      <span className="rounded-full border border-violet-500/20 bg-slate-950/50 px-3 py-1 text-sm font-medium text-violet-200">
-                        {generationJob.progress ?? 0}%
-                      </span>
-                    </div>
+              <div className="border-t border-slate-700/50 px-6 py-4">
+                <div className="flex flex-col-reverse gap-3 sm:flex-row">
+                  <Button variant="ghost" onClick={() => setShowGenerateDialog(false)} className="flex-1">
+                    {isGenerationBusy ? 'Close' : 'Cancel'}
+                  </Button>
+                  <Button onClick={onGenerate} loading={generatingAI} disabled={!canGenerate} className="flex-1">
+                    {generatingAI ? 'Starting...' : pollingGeneration ? 'Generating...' : `Generate ${getAssetTypeLabel(aiContentType)}`}
+                  </Button>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      )}
 
-                    <div className="mt-3 h-2 w-full overflow-hidden rounded-full bg-slate-800">
-                      <div
-                        className="h-full rounded-full bg-gradient-to-r from-violet-500 to-indigo-500 transition-all duration-500"
-                        style={{ width: `${Math.min(100, Math.max(0, generationJob.progress ?? 0))}%` }}
-                      />
-                    </div>
+      {showReferencePickerDialog && (
+        <div
+          className="fixed inset-0 z-[80] flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm"
+          onClick={() => setShowReferencePickerDialog(false)}
+        >
+          <Card
+            className="flex max-h-[90vh] w-full max-w-5xl flex-col overflow-hidden border-slate-700/70 bg-slate-900 shadow-2xl"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="relative border-b border-slate-700/50 p-6">
+              <h2 className="text-2xl font-semibold text-white">Select Reference Images</h2>
+              <p className="mt-2 text-sm text-slate-400">
+                Choose existing image assets to guide the new generation.
+              </p>
+              <button
+                type="button"
+                onClick={() => setShowReferencePickerDialog(false)}
+                className="absolute right-4 top-4 rounded-full border border-white/10 bg-slate-800/50 p-2 text-slate-200 transition-colors hover:bg-slate-800 hover:text-white"
+                aria-label="Close reference picker"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <CardContent className="flex min-h-0 flex-1 flex-col p-0">
+              <div className="min-h-0 flex-1 overflow-y-auto px-6 py-6">
+                <div className="space-y-4 pr-1">
+                  <div className="relative">
+                    <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
+                    <Input
+                      value={assetSelectionSearch}
+                      onChange={(event) => setAssetSelectionSearch(event.target.value)}
+                      placeholder="Search image assets"
+                      className="pl-10"
+                    />
                   </div>
-                )}
 
-                {generationError && (
-                  <div className="rounded-xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-200">
-                    {generationError}
+                  {filteredImageLibraryAssets.length === 0 ? (
+                    <div className="flex min-h-64 items-center justify-center rounded-2xl border border-dashed border-slate-700 text-center text-slate-400">
+                      No image assets found for this search.
+                    </div>
+                  ) : (
+                    <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                      {filteredImageLibraryAssets.map((asset) => {
+                        const isSelected = selectedReferenceImages.some((selectedAsset) => selectedAsset.id === asset.id);
+
+                        return (
+                          <button
+                            key={asset.id}
+                            type="button"
+                            onClick={() => {
+                              onSelectedReferenceImagesChange(
+                                isSelected
+                                  ? selectedReferenceImages.filter((selectedAsset) => selectedAsset.id !== asset.id)
+                                  : mergeAssetsById(selectedReferenceImages, [asset])
+                              );
+                            }}
+                            className={`group overflow-hidden rounded-2xl border text-left transition-all ${
+                              isSelected
+                                ? 'border-violet-500 bg-violet-500/10'
+                                : 'border-slate-800 bg-slate-950 hover:border-slate-700 hover:bg-slate-900'
+                            }`}
+                          >
+                            <div className="relative aspect-video overflow-hidden bg-slate-950">
+                              {asset.url ? (
+                                <img
+                                  src={asset.thumbnailUrl || asset.url || ''}
+                                  alt={asset.title}
+                                  className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
+                                />
+                              ) : (
+                                <div className="flex h-full items-center justify-center">
+                                  <ImageIcon className="h-8 w-8 text-slate-500" />
+                                </div>
+                              )}
+                              {isSelected && (
+                                <div className="absolute right-3 top-3 inline-flex items-center gap-1 rounded-full bg-violet-500 px-2.5 py-1 text-xs font-medium text-white">
+                                  <Check className="h-3.5 w-3.5" />
+                                  Selected
+                                </div>
+                              )}
+                            </div>
+                            <div className="p-4">
+                              <p className="truncate text-sm font-semibold text-white">{asset.title}</p>
+                              <p className="mt-1 text-xs text-slate-400">
+                                {asset.source === 'uploaded' ? 'Uploaded asset' : 'AI generated asset'}
+                              </p>
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className="border-t border-slate-700/50 px-6 py-4">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <p className="text-sm text-slate-400">
+                    {selectedReferenceImages.length === 0
+                      ? 'Select one or more images, then confirm.'
+                      : `${selectedReferenceImages.length} reference image${selectedReferenceImages.length === 1 ? '' : 's'} selected`}
+                  </p>
+                  <div className="flex flex-col-reverse gap-3 sm:flex-row">
+                    <Button variant="ghost" onClick={() => setShowReferencePickerDialog(false)}>
+                      Cancel
+                    </Button>
+                    <Button onClick={() => setShowReferencePickerDialog(false)}>
+                      Use Selected Images
+                    </Button>
                   </div>
-                )}
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      )}
 
-                <Button onClick={onGenerate} loading={generatingAI} disabled={!aiPrompt.trim() || isGenerationBusy} className="w-full">
-                  <Sparkles className="h-4 w-4" />
-                  {generatingAI ? 'Starting...' : pollingGeneration ? 'Generating...' : `Generate ${aiContentType}`}
-                </Button>
+      {showBaseImagePickerDialog && (
+        <div
+          className="fixed inset-0 z-[80] flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm"
+          onClick={() => setShowBaseImagePickerDialog(false)}
+        >
+          <Card
+            className="flex max-h-[90vh] w-full max-w-5xl flex-col overflow-hidden border-slate-700/70 bg-slate-900 shadow-2xl"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="relative border-b border-slate-700/50 p-6">
+              <h2 className="text-2xl font-semibold text-white">Select Base Image</h2>
+              <p className="mt-2 text-sm text-slate-400">
+                Choose an existing image asset to animate into a video.
+              </p>
+              <button
+                type="button"
+                onClick={() => setShowBaseImagePickerDialog(false)}
+                className="absolute right-4 top-4 rounded-full border border-white/10 bg-slate-800/50 p-2 text-slate-200 transition-colors hover:bg-slate-800 hover:text-white"
+                aria-label="Close base image picker"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <CardContent className="flex min-h-0 flex-1 flex-col p-0">
+              <div className="min-h-0 flex-1 overflow-y-auto px-6 py-6">
+                <div className="space-y-4 pr-1">
+                  <div className="relative">
+                    <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
+                    <Input
+                      value={assetSelectionSearch}
+                      onChange={(event) => setAssetSelectionSearch(event.target.value)}
+                      placeholder="Search image assets"
+                      className="pl-10"
+                    />
+                  </div>
+
+                  {filteredImageLibraryAssets.length === 0 ? (
+                    <div className="flex min-h-64 items-center justify-center rounded-2xl border border-dashed border-slate-700 text-center text-slate-400">
+                      No image assets found for this search.
+                    </div>
+                  ) : (
+                    <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                      {filteredImageLibraryAssets.map((asset) => {
+                        const isSelected = selectedBaseImage?.id === asset.id;
+
+                        return (
+                          <button
+                            key={asset.id}
+                            type="button"
+                            onClick={() => onSelectedBaseImageChange(asset)}
+                            className={`group overflow-hidden rounded-2xl border text-left transition-all ${
+                              isSelected
+                                ? 'border-violet-500 bg-violet-500/10'
+                                : 'border-slate-800 bg-slate-950 hover:border-slate-700 hover:bg-slate-900'
+                            }`}
+                          >
+                            <div className="relative aspect-video overflow-hidden bg-slate-950">
+                              {asset.url ? (
+                                <img
+                                  src={asset.thumbnailUrl || asset.url || ''}
+                                  alt={asset.title}
+                                  className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
+                                />
+                              ) : (
+                                <div className="flex h-full items-center justify-center">
+                                  <ImageIcon className="h-8 w-8 text-slate-500" />
+                                </div>
+                              )}
+                              {isSelected && (
+                                <div className="absolute right-3 top-3 inline-flex items-center gap-1 rounded-full bg-violet-500 px-2.5 py-1 text-xs font-medium text-white">
+                                  <Check className="h-3.5 w-3.5" />
+                                  Selected
+                                </div>
+                              )}
+                            </div>
+                            <div className="p-4">
+                              <p className="truncate text-sm font-semibold text-white">{asset.title}</p>
+                              <p className="mt-1 text-xs text-slate-400">
+                                {asset.source === 'uploaded' ? 'Uploaded asset' : 'AI generated asset'}
+                              </p>
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className="border-t border-slate-700/50 px-6 py-4">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <p className="text-sm text-slate-400">
+                    {selectedBaseImage ? `Base image selected: ${selectedBaseImage.title}` : 'Select one image to use as the video base.'}
+                  </p>
+                  <div className="flex flex-col-reverse gap-3 sm:flex-row">
+                    <Button variant="ghost" onClick={() => setShowBaseImagePickerDialog(false)}>
+                      Cancel
+                    </Button>
+                    <Button onClick={() => setShowBaseImagePickerDialog(false)} disabled={!selectedBaseImage}>
+                      Use Base Image
+                    </Button>
+                  </div>
+                </div>
               </div>
             </CardContent>
           </Card>
@@ -892,39 +1644,67 @@ const AssetPicker: React.FC<{
                 }}
               >
                 {loadingVoices ? (
-                  <div className="flex items-center justify-center py-8">
-                    <Loader2 className="h-6 w-6 animate-spin text-violet-500" />
+                  <div className="flex min-h-60 items-center justify-center text-slate-400">
+                    <Loader2 className="mr-3 h-5 w-5 animate-spin text-violet-400" />
+                    Loading voices...
                   </div>
                 ) : voices.length === 0 ? (
-                  <div className="flex flex-col items-center justify-center py-12 text-slate-500">
-                    <AudioLines className="h-12 w-12 mb-3 opacity-50" />
-                    <p>No voices found</p>
-                    <p className="text-sm text-slate-600">Try adjusting your search terms</p>
+                  <div className="flex min-h-60 items-center justify-center text-center text-slate-400">
+                    No voices found for this search.
                   </div>
                 ) : (
                   voices.map((voice) => (
                     <button
                       key={voice.voice_id}
+                      type="button"
                       onClick={() => {
                         onVoiceSelect(voice);
                         onVoicePickerClose();
                       }}
-                      className="flex w-full items-center gap-4 rounded-lg border border-slate-700 bg-slate-800 p-4 text-left transition-all hover:border-violet-500 hover:bg-slate-750"
+                      className={`w-full rounded-2xl border p-4 text-left transition-all ${
+                        selectedVoice?.voice_id === voice.voice_id
+                          ? 'border-violet-500 bg-violet-500/10'
+                          : 'border-slate-800 bg-slate-950 hover:border-slate-700 hover:bg-slate-900'
+                      }`}
                     >
-                      <div className="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-violet-500 to-indigo-500">
-                        <Mic className="h-5 w-5 text-white" />
+                      <div className="flex items-start justify-between gap-4">
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2">
+                            <h3 className="truncate text-base font-semibold text-white">{voice.name}</h3>
+                            {voice.category && (
+                              <span className="rounded-full border border-slate-700 bg-slate-900 px-2 py-0.5 text-[11px] uppercase tracking-wide text-slate-300">
+                                {voice.category}
+                              </span>
+                            )}
+                          </div>
+                          {voice.description && (
+                            <p className="mt-2 line-clamp-2 text-sm text-slate-400">{voice.description}</p>
+                          )}
+                          <div className="mt-3 flex flex-wrap gap-2 text-xs text-slate-400">
+                            {getVoiceMeta(voice) && (
+                              <span className="rounded-full bg-slate-900 px-2.5 py-1">{getVoiceMeta(voice)}</span>
+                            )}
+                            {voice.locale && (
+                              <span className="rounded-full bg-slate-900 px-2.5 py-1">{voice.locale}</span>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="flex shrink-0 items-center gap-2">
+                          {selectedVoice?.voice_id === voice.voice_id && (
+                            <span className="inline-flex items-center gap-1 rounded-full border border-violet-500/30 bg-violet-500/15 px-2 py-1 text-xs font-medium text-violet-200">
+                              <Check className="h-3.5 w-3.5" />
+                              Selected
+                            </span>
+                          )}
+                          <ChevronRight className="h-5 w-5 text-slate-500" />
+                        </div>
                       </div>
-                      <div className="min-w-0 flex-1">
-                        <h3 className="font-semibold text-white">{voice.name}</h3>
-                        <p className="text-sm text-slate-400">
-                          {[voice.gender, voice.age, voice.accent || voice.language || voice.locale].filter(Boolean).join(' • ')}
-                        </p>
-                        {voice.description && (
-                          <p className="mt-1 text-xs text-slate-500 line-clamp-1">{voice.description}</p>
-                        )}
-                      </div>
-                      {selectedVoice?.voice_id === voice.voice_id && (
-                        <Check className="h-5 w-5 text-violet-400" />
+
+                      {voice.preview_url && (
+                        <div className="mt-4" onClick={(event) => event.stopPropagation()}>
+                          <audio src={voice.preview_url} controls className="w-full" />
+                        </div>
                       )}
                     </button>
                   ))
@@ -1131,9 +1911,15 @@ const [hasLoadedBackgroundTracksOnce, setHasLoadedBackgroundTracksOnce] = useSta
   const [pickerUploadError, setPickerUploadError] = useState<string | null>(null);
   const [pickerUploading, setPickerUploading] = useState(false);
   const [pickerAiPrompt, setPickerAiPrompt] = useState('');
+  const [pickerAiMotionPrompt, setPickerAiMotionPrompt] = useState('');
   const [pickerAiContentType, setPickerAiContentType] = useState<AssetType>('image');
   const [pickerAiAspectRatio, setPickerAiAspectRatio] = useState<'16:9' | '9:16' | '1:1'>('1:1');
   const [pickerAiDurationSeconds, setPickerAiDurationSeconds] = useState('5');
+  const [pickerAiRemoveBackground, setPickerAiRemoveBackground] = useState(false);
+  const [pickerVideoGenerationMode, setPickerVideoGenerationMode] = useState<'prompt' | 'base-image'>('prompt');
+  const [pickerSelectedReferenceImages, setPickerSelectedReferenceImages] = useState<Asset[]>([]);
+  const [pickerSelectedBaseImage, setPickerSelectedBaseImage] = useState<Asset | null>(null);
+  const [pickerUploadingReferenceImages, setPickerUploadingReferenceImages] = useState(false);
   const [pickerGeneratingAI, setPickerGeneratingAI] = useState(false);
   const [pickerPollingGeneration, setPickerPollingGeneration] = useState(false);
   const [pickerGenerationJob, setPickerGenerationJob] = useState<AssetGenerationJobResponse | null>(null);
@@ -1678,6 +2464,24 @@ const [hasLoadedBackgroundTracksOnce, setHasLoadedBackgroundTracksOnce] = useSta
     setPickerPage(1);
   }, [loadPickerAssets, pickerPage]);
 
+  const resetPickerGenerationState = useCallback(() => {
+    setPickerAiPrompt('');
+    setPickerAiMotionPrompt('');
+    setPickerAiContentType('image');
+    setPickerAiAspectRatio('1:1');
+    setPickerAiDurationSeconds('5');
+    setPickerAiRemoveBackground(false);
+    setPickerVideoGenerationMode('prompt');
+    setPickerSelectedReferenceImages([]);
+    setPickerSelectedBaseImage(null);
+    setPickerGenerationJob(null);
+    setPickerGenerationError(null);
+    setPickerPollingGeneration(false);
+    setPickerSelectedVoice(null);
+    setPickerVoicesSearch('');
+    setPickerShowVoicePicker(false);
+  }, []);
+
   const openAssetPicker = useCallback((
     target: { sceneId?: string; rowType: 'primary' | 'secondary' | 'narration' | 'globalBg'; secondaryOverlapIndex?: number; },
     allowedTypes?: AssetType[]
@@ -1691,13 +2495,15 @@ const [hasLoadedBackgroundTracksOnce, setHasLoadedBackgroundTracksOnce] = useSta
     setPickerAssetTypeFilter(allowedTypes && allowedTypes.length > 0 ? allowedTypes[0] : 'all');
     setPickerPage(1);
     resetPickerUploadState();
-  }, [resetPickerUploadState]);
+    resetPickerGenerationState();
+  }, [resetPickerGenerationState, resetPickerUploadState]);
 
   const closeAssetPicker = useCallback(() => {
     setShowAssetPicker(false);
     setCurrentPickerTarget(null);
     setPickerAllowedTypes(undefined);
-  }, []);
+    resetPickerGenerationState();
+  }, [resetPickerGenerationState]);
 
   const handlePickerFileSelect = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -1786,8 +2592,74 @@ const [hasLoadedBackgroundTracksOnce, setHasLoadedBackgroundTracksOnce] = useSta
     }
   }, [loadPickerAssets, pickerPage, pickerSelectedFile, resetPickerUploadState]);
 
+  const handlePickerReferenceImageUpload = useCallback(async (files: File[]) => {
+    if (files.length === 0) {
+      return;
+    }
+
+    const invalidFile = files.find((file) => !file.type.startsWith('image/'));
+    if (invalidFile) {
+      setPickerGenerationError('Only image files can be used as reference images.');
+      return;
+    }
+
+    setPickerGenerationError(null);
+    setPickerUploadingReferenceImages(true);
+
+    try {
+      const uploadedAssets = await Promise.all(
+        files.map((file) => assetsApi.upload(file, file.name.replace(/\.[^/.]+$/, ''), 'image'))
+      );
+      const mappedAssets = uploadedAssets.map(mapLibraryAsset);
+      const hasProcessingUpload = mappedAssets.some((asset) => asset.status !== 'ready');
+
+      setLibraryAssets((currentAssets) => mergeAssetsById(currentAssets, mappedAssets));
+      setPickerSelectedReferenceImages((currentAssets) => mergeAssetsById(currentAssets, mappedAssets));
+
+      if (hasProcessingUpload) {
+        setPickerGenerationError('Some uploaded reference images are still processing. They will become usable once ready.');
+      }
+
+      if (pickerPage === 1) {
+        await loadPickerAssets('refresh');
+      } else {
+        setPickerPage(1);
+      }
+    } catch (error) {
+      console.error('Failed to upload picker reference images:', error);
+      setPickerGenerationError(getApiErrorMessage(error, 'Failed to upload reference images.'));
+    } finally {
+      setPickerUploadingReferenceImages(false);
+    }
+  }, [loadPickerAssets, pickerPage]);
+
   const handlePickerGenerate = useCallback(async () => {
-    if (!pickerAiPrompt.trim()) {
+    const trimmedPrompt = pickerAiPrompt.trim();
+    const trimmedMotionPrompt = pickerAiMotionPrompt.trim();
+    const isVideoUsingBaseImage = pickerAiContentType === 'video' && pickerVideoGenerationMode === 'base-image';
+    const hasPendingReferenceImages = pickerSelectedReferenceImages.some((asset) => asset.status !== 'ready');
+    const hasPendingBaseImage = !!pickerSelectedBaseImage && pickerSelectedBaseImage.status !== 'ready';
+
+    if (
+      (pickerAiContentType === 'image' && !trimmedPrompt) ||
+      (pickerAiContentType === 'audio' && !trimmedPrompt) ||
+      (pickerAiContentType === 'video' && pickerVideoGenerationMode === 'prompt' && (!trimmedPrompt || !trimmedMotionPrompt)) ||
+      (isVideoUsingBaseImage && (!pickerSelectedBaseImage || !trimmedMotionPrompt))
+    ) {
+      return;
+    }
+
+    if (pickerUploadingReferenceImages) {
+      return;
+    }
+
+    if (hasPendingReferenceImages) {
+      setPickerGenerationError('Please wait for reference images to finish uploading before generating.');
+      return;
+    }
+
+    if (hasPendingBaseImage) {
+      setPickerGenerationError('Please wait for the selected base image to finish processing before generating.');
       return;
     }
 
@@ -1795,19 +2667,57 @@ const [hasLoadedBackgroundTracksOnce, setHasLoadedBackgroundTracksOnce] = useSta
     setPickerGenerationError(null);
 
     try {
-      const response = await assetsApi.generate({
-        asset_type: pickerAiContentType,
-        prompt: pickerAiContentType === 'audio' ? undefined : pickerAiPrompt,
-        text: pickerAiContentType === 'audio' ? pickerAiPrompt : undefined,
-        aspect_ratio: pickerAiContentType === 'audio' ? undefined : pickerAiAspectRatio,
-        duration_seconds: Number(pickerAiDurationSeconds) || 5,
-        elevenlabs_voice_id: pickerAiContentType === 'audio' && pickerSelectedVoice ? pickerSelectedVoice.voice_id : undefined,
-      });
+      const response = await assetsApi.generate(
+        pickerAiContentType === 'image'
+          ? {
+              asset_type: 'image',
+              title: buildGeneratedAssetTitle(trimmedPrompt, 'image'),
+              image_prompt: trimmedPrompt,
+              aspect_ratio: pickerAiAspectRatio,
+              remove_background: pickerAiRemoveBackground,
+              reference_image_asset_ids: pickerSelectedReferenceImages.map((asset) => asset.id),
+              extra_metadata: {},
+            }
+          : pickerAiContentType === 'video'
+            ? (
+                isVideoUsingBaseImage
+                  ? {
+                      asset_type: 'video',
+                      title: pickerSelectedBaseImage
+                        ? `Animated ${pickerSelectedBaseImage.title}`
+                        : buildGeneratedAssetTitle(trimmedMotionPrompt, 'video'),
+                      base_image_asset_id: pickerSelectedBaseImage?.id,
+                      motion_prompt: trimmedMotionPrompt,
+                      aspect_ratio: pickerAiAspectRatio,
+                      duration_seconds: Number(pickerAiDurationSeconds) || 5,
+                      extra_metadata: {
+                        workflow: 'base-image-animation',
+                      },
+                    }
+                  : {
+                      asset_type: 'video',
+                      title: buildGeneratedAssetTitle(trimmedPrompt, 'video'),
+                      image_prompt: trimmedPrompt,
+                      prompt: trimmedPrompt,
+                      reference_image_asset_ids: pickerSelectedReferenceImages.map((asset) => asset.id),
+                      motion_prompt: trimmedMotionPrompt,
+                      aspect_ratio: pickerAiAspectRatio,
+                      duration_seconds: Number(pickerAiDurationSeconds) || 5,
+                      extra_metadata: {},
+                    }
+              )
+            : {
+                asset_type: 'audio',
+                text: trimmedPrompt,
+                duration_seconds: Number(pickerAiDurationSeconds) || 5,
+                elevenlabs_voice_id: pickerSelectedVoice ? pickerSelectedVoice.voice_id : undefined,
+              }
+      );
 
       if (response.asset) {
         const mappedAsset = mapLibraryAsset(response.asset);
         setLibraryAssets((currentAssets) => mergeAssetsById(currentAssets, [mappedAsset]));
-        setPickerAiPrompt('');
+        resetPickerGenerationState();
 
         if (pickerPage === 1) {
           await loadPickerAssets('refresh');
@@ -1834,9 +2744,16 @@ const [hasLoadedBackgroundTracksOnce, setHasLoadedBackgroundTracksOnce] = useSta
     pickerAiAspectRatio,
     pickerAiContentType,
     pickerAiDurationSeconds,
+    pickerAiMotionPrompt,
+    pickerAiRemoveBackground,
     pickerAiPrompt,
     pickerPage,
+    pickerSelectedBaseImage,
+    pickerSelectedReferenceImages,
     pickerSelectedVoice,
+    pickerUploadingReferenceImages,
+    pickerVideoGenerationMode,
+    resetPickerGenerationState,
   ]);
 
   const loadPickerVoices = useCallback(async (mode: 'initial' | 'refresh' | 'more' = 'initial') => {
@@ -1869,6 +2786,56 @@ const [hasLoadedBackgroundTracksOnce, setHasLoadedBackgroundTracksOnce] = useSta
       setPickerLoadingMoreVoices(false);
     }
   }, [pickerVoicesNextPageToken, pickerVoicesSearch]);
+
+  useEffect(() => {
+    if (!pickerShowVoicePicker) {
+      return;
+    }
+
+    void loadPickerVoices('initial');
+  }, [loadPickerVoices, pickerShowVoicePicker, pickerVoicesSearch]);
+
+  useEffect(() => {
+    if (libraryAssets.length === 0) {
+      return;
+    }
+
+    setPickerSelectedReferenceImages((currentAssets) =>
+      currentAssets.map((asset) => libraryAssets.find((libraryAsset) => libraryAsset.id === asset.id) || asset)
+    );
+    setPickerSelectedBaseImage((currentAsset) =>
+      currentAsset ? libraryAssets.find((libraryAsset) => libraryAsset.id === currentAsset.id) || currentAsset : null
+    );
+  }, [libraryAssets]);
+
+  useEffect(() => {
+    if (pickerAiContentType !== 'video') {
+      setPickerAiMotionPrompt('');
+      setPickerVideoGenerationMode('prompt');
+      setPickerSelectedBaseImage(null);
+    }
+
+    if (pickerAiContentType !== 'image') {
+      setPickerAiRemoveBackground(false);
+      if (pickerAiContentType !== 'video' || pickerVideoGenerationMode === 'base-image') {
+        setPickerSelectedReferenceImages([]);
+      }
+    }
+  }, [pickerAiContentType, pickerVideoGenerationMode]);
+
+  useEffect(() => {
+    if (pickerAiContentType !== 'video') {
+      return;
+    }
+
+    if (pickerVideoGenerationMode === 'base-image') {
+      setPickerSelectedReferenceImages([]);
+      setPickerAiPrompt('');
+      return;
+    }
+
+    setPickerSelectedBaseImage(null);
+  }, [pickerAiContentType, pickerVideoGenerationMode]);
 
   useEffect(() => {
     const loadLibraryAssets = async () => {
@@ -2697,6 +3664,7 @@ const [hasLoadedBackgroundTracksOnce, setHasLoadedBackgroundTracksOnce] = useSta
         onClose={closeAssetPicker}
         onSelectAsset={handleAssetSelect}
         assets={pickerAssets}
+        libraryAssets={libraryAssets}
         loading={loadingPickerAssets}
         refreshing={refreshingPickerAssets}
         loadingMore={loadingMorePickerAssets}
@@ -2709,9 +3677,15 @@ const [hasLoadedBackgroundTracksOnce, setHasLoadedBackgroundTracksOnce] = useSta
         uploadError={pickerUploadError}
         uploading={pickerUploading}
         aiPrompt={pickerAiPrompt}
+        aiMotionPrompt={pickerAiMotionPrompt}
         aiContentType={pickerAiContentType}
         aiAspectRatio={pickerAiAspectRatio}
         aiDurationSeconds={pickerAiDurationSeconds}
+        aiRemoveBackground={pickerAiRemoveBackground}
+        videoGenerationMode={pickerVideoGenerationMode}
+        selectedReferenceImages={pickerSelectedReferenceImages}
+        selectedBaseImage={pickerSelectedBaseImage}
+        uploadingReferenceImages={pickerUploadingReferenceImages}
         generatingAI={pickerGeneratingAI}
         pollingGeneration={pickerPollingGeneration}
         generationJob={pickerGenerationJob}
@@ -2732,9 +3706,15 @@ const [hasLoadedBackgroundTracksOnce, setHasLoadedBackgroundTracksOnce] = useSta
         onClearFile={resetPickerUploadState}
         onUpload={() => { void handlePickerUpload(); }}
         onAiPromptChange={setPickerAiPrompt}
+        onAiMotionPromptChange={setPickerAiMotionPrompt}
         onAiContentTypeChange={setPickerAiContentType}
         onAiAspectRatioChange={setPickerAiAspectRatio}
         onAiDurationSecondsChange={setPickerAiDurationSeconds}
+        onAiRemoveBackgroundChange={setPickerAiRemoveBackground}
+        onVideoGenerationModeChange={setPickerVideoGenerationMode}
+        onSelectedReferenceImagesChange={setPickerSelectedReferenceImages}
+        onSelectedBaseImageChange={setPickerSelectedBaseImage}
+        onReferenceImagesUpload={(files) => { void handlePickerReferenceImageUpload(files); }}
         onGenerate={() => { void handlePickerGenerate(); }}
         selectedVoice={pickerSelectedVoice}
         voices={pickerVoices}
@@ -2747,7 +3727,6 @@ const [hasLoadedBackgroundTracksOnce, setHasLoadedBackgroundTracksOnce] = useSta
         onVoicesSearchChange={setPickerVoicesSearch}
         onVoicePickerOpen={() => {
           setPickerShowVoicePicker(true);
-          void loadPickerVoices('initial');
         }}
         onVoicePickerClose={() => setPickerShowVoicePicker(false)}
         onVoicesScrollEnd={() => {

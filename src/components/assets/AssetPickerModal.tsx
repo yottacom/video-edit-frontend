@@ -4,6 +4,7 @@ import { ChangeEvent, useCallback, useEffect, useRef, useState } from 'react';
 import {
   AudioLines,
   ChevronRight,
+  Check,
   Image as ImageIcon,
   Loader2,
   Play,
@@ -26,7 +27,7 @@ import {
   mapAssetItemToLibraryAsset,
   mergeLibraryAssetsById,
 } from '@/lib/library-assets';
-import { AssetGenerationJobResponse, AssetType } from '@/types';
+import { AssetGenerationJobResponse, AssetType, ElevenLabsVoice } from '@/types';
 
 interface AssetPickerModalProps {
   isOpen: boolean;
@@ -62,6 +63,15 @@ export function AssetPickerModal({
   const [aiContentType, setAiContentType] = useState<AssetType>('image');
   const [aiAspectRatio, setAiAspectRatio] = useState<'16:9' | '9:16' | '1:1'>('1:1');
   const [aiDurationSeconds, setAiDurationSeconds] = useState('5');
+  const [selectedVoice, setSelectedVoice] = useState<ElevenLabsVoice | null>(null);
+  const [voices, setVoices] = useState<ElevenLabsVoice[]>([]);
+  const [loadingVoices, setLoadingVoices] = useState(false);
+  const [loadingMoreVoices, setLoadingMoreVoices] = useState(false);
+  const [voicesNextPageToken, setVoicesNextPageToken] = useState<string | null>(null);
+  const [voicesHasMore, setVoicesHasMore] = useState(false);
+  const [showVoicePickerModal, setShowVoicePickerModal] = useState(false);
+  const [voiceSearchInput, setVoiceSearchInput] = useState('');
+  const [debouncedVoiceSearch, setDebouncedVoiceSearch] = useState('');
   const [generatingAI, setGeneratingAI] = useState(false);
   const [pollingGeneration, setPollingGeneration] = useState(false);
   const [generationJob, setGenerationJob] = useState<AssetGenerationJobResponse | null>(null);
@@ -179,6 +189,10 @@ export function AssetPickerModal({
     setAiAspectRatio('1:1');
     setAiDurationSeconds('5');
     setAiPrompt('');
+    setSelectedVoice(null);
+    setVoiceSearchInput('');
+    setDebouncedVoiceSearch('');
+    setShowVoicePickerModal(false);
     setGenerationJob(null);
     setGenerationError(null);
     setPollingGeneration(false);
@@ -310,6 +324,7 @@ export function AssetPickerModal({
         text: aiContentType === 'audio' ? aiPrompt : undefined,
         aspect_ratio: aiContentType === 'audio' ? undefined : aiAspectRatio,
         duration_seconds: Number(aiDurationSeconds) || 5,
+        elevenlabs_voice_id: aiContentType === 'audio' && selectedVoice ? selectedVoice.voice_id : undefined,
       });
 
       if (response.asset) {
@@ -344,6 +359,7 @@ export function AssetPickerModal({
     aiPrompt,
     loadAssets,
     page,
+    selectedVoice,
   ]);
 
   useEffect(() => {
@@ -357,12 +373,61 @@ export function AssetPickerModal({
   }, [searchInput]);
 
   useEffect(() => {
+    const timeoutId = window.setTimeout(() => {
+      setDebouncedVoiceSearch(voiceSearchInput.trim());
+    }, 300);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [voiceSearchInput]);
+
+  useEffect(() => {
     return () => {
       if (filePreviewUrl) {
         URL.revokeObjectURL(filePreviewUrl);
       }
     };
   }, [filePreviewUrl]);
+
+  const loadVoices = useCallback(async (
+    mode: 'reset' | 'append' = 'reset',
+    nextPageToken?: string | null
+  ) => {
+    if (mode === 'reset') {
+      setLoadingVoices(true);
+    } else {
+      setLoadingMoreVoices(true);
+    }
+
+    try {
+      const response = await assetsApi.listElevenLabsVoices({
+        page_size: 20,
+        next_page_token: mode === 'append' ? nextPageToken || undefined : undefined,
+        search: debouncedVoiceSearch || undefined,
+      });
+
+      setVoices((currentVoices) =>
+        mode === 'append' ? [...currentVoices, ...response.items] : response.items
+      );
+      setVoicesNextPageToken(response.next_page_token || null);
+      setVoicesHasMore(response.has_more);
+    } catch (error) {
+      console.error('Failed to load ElevenLabs voices:', error);
+      alert(getApiErrorMessage(error, 'Failed to load ElevenLabs voices.'));
+    } finally {
+      setLoadingVoices(false);
+      setLoadingMoreVoices(false);
+    }
+  }, [debouncedVoiceSearch]);
+
+  useEffect(() => {
+    if (!showVoicePickerModal) {
+      return;
+    }
+
+    void loadVoices('reset');
+  }, [debouncedVoiceSearch, loadVoices, showVoicePickerModal]);
 
   useEffect(() => {
     if (!isOpen) {
@@ -717,6 +782,129 @@ export function AssetPickerModal({
         </div>
       )}
 
+      {showVoicePickerModal && (
+        <div
+          className="fixed inset-0 z-[85] flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm"
+          onClick={() => setShowVoicePickerModal(false)}
+        >
+          <Card
+            className="flex max-h-[90vh] w-full max-w-4xl flex-col overflow-hidden border-slate-700/70 bg-slate-900 shadow-2xl"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="relative border-b border-slate-700/50 p-6">
+              <h2 className="text-2xl font-semibold text-white">Select ElevenLabs Voice</h2>
+              <p className="mt-2 text-sm text-slate-400">
+                Search and browse voices, then choose one for AI audio generation.
+              </p>
+              <button
+                type="button"
+                onClick={() => setShowVoicePickerModal(false)}
+                className="absolute right-4 top-4 rounded-full border border-white/10 bg-slate-800/50 p-2 text-slate-200 transition-colors hover:bg-slate-800 hover:text-white"
+                aria-label="Close voice picker"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <CardContent className="flex min-h-0 flex-1 flex-col gap-4 p-6">
+              <div className="relative">
+                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
+                <input
+                  placeholder="Search voices by name, accent, or description"
+                  value={voiceSearchInput}
+                  onChange={(event) => setVoiceSearchInput(event.target.value)}
+                  className="block w-full rounded-md border border-slate-700 bg-slate-800 py-2 pl-10 pr-3 text-sm text-white placeholder-slate-500 focus:border-violet-500 focus:outline-none"
+                />
+              </div>
+
+              <div
+                className="min-h-0 flex-1 space-y-3 overflow-y-auto pr-1"
+                onScroll={(event) => {
+                  const target = event.currentTarget;
+                  const distanceFromBottom = target.scrollHeight - target.scrollTop - target.clientHeight;
+                  if (distanceFromBottom < 120 && voicesHasMore && !loadingVoices && !loadingMoreVoices && voicesNextPageToken) {
+                    void loadVoices('append', voicesNextPageToken);
+                  }
+                }}
+              >
+                {loadingVoices ? (
+                  <div className="flex min-h-60 items-center justify-center text-slate-400">
+                    <Loader2 className="mr-3 h-5 w-5 animate-spin text-violet-400" />
+                    Loading voices...
+                  </div>
+                ) : voices.length === 0 ? (
+                  <div className="flex min-h-60 items-center justify-center text-center text-slate-400">
+                    No voices found for this search.
+                  </div>
+                ) : (
+                  voices.map((voice) => (
+                    <button
+                      key={voice.voice_id}
+                      type="button"
+                      onClick={() => {
+                        setSelectedVoice(voice);
+                        setShowVoicePickerModal(false);
+                      }}
+                      className={`w-full rounded-2xl border p-4 text-left transition-all ${
+                        selectedVoice?.voice_id === voice.voice_id
+                          ? 'border-violet-500 bg-violet-500/10'
+                          : 'border-slate-800 bg-slate-950 hover:border-slate-700 hover:bg-slate-900'
+                      }`}
+                    >
+                      <div className="flex items-start justify-between gap-4">
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2">
+                            <h3 className="truncate text-base font-semibold text-white">{voice.name}</h3>
+                            {voice.category && (
+                              <span className="rounded-full border border-slate-700 bg-slate-900 px-2 py-0.5 text-[11px] uppercase tracking-wide text-slate-300">
+                                {voice.category}
+                              </span>
+                            )}
+                          </div>
+                          {voice.description && (
+                            <p className="mt-2 line-clamp-2 text-sm text-slate-400">{voice.description}</p>
+                          )}
+                          <div className="mt-3 flex flex-wrap gap-2 text-xs text-slate-400">
+                            <span className="rounded-full bg-slate-900 px-2.5 py-1">
+                              {[voice.gender, voice.age, voice.accent || voice.language || voice.locale].filter(Boolean).join(' • ')}
+                            </span>
+                            {voice.locale && (
+                              <span className="rounded-full bg-slate-900 px-2.5 py-1">{voice.locale}</span>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="flex shrink-0 items-center gap-2">
+                          {selectedVoice?.voice_id === voice.voice_id && (
+                            <span className="inline-flex items-center gap-1 rounded-full border border-violet-500/30 bg-violet-500/15 px-2 py-1 text-xs font-medium text-violet-200">
+                              <Check className="h-3.5 w-3.5" />
+                              Selected
+                            </span>
+                          )}
+                          <ChevronRight className="h-5 w-5 text-slate-500" />
+                        </div>
+                      </div>
+
+                      {voice.preview_url && (
+                        <div className="mt-4" onClick={(event) => event.stopPropagation()}>
+                          <audio src={voice.preview_url} controls className="w-full" />
+                        </div>
+                      )}
+                    </button>
+                  ))
+                )}
+
+                {loadingMoreVoices && (
+                  <div className="flex items-center justify-center py-4">
+                    <Loader2 className="h-5 w-5 animate-spin text-violet-500" />
+                  </div>
+                )}
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
       {showUploadDialog && (
         <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm" onClick={() => setShowUploadDialog(false)}>
           <Card className="w-full max-w-xl border-slate-700/70 bg-slate-900 shadow-2xl" onClick={(event) => event.stopPropagation()}>
@@ -829,16 +1017,80 @@ export function AssetPickerModal({
                 </div>
 
                 <div>
-                  <label className="mb-2 block text-sm font-medium text-slate-300">Prompt</label>
+                  <label className="mb-2 block text-sm font-medium text-slate-300">
+                    {aiContentType === 'audio' ? 'What should the voice say?' : 'Prompt'}
+                  </label>
                   <textarea
                     value={aiPrompt}
                     onChange={(event) => setAiPrompt(event.target.value)}
                     rows={4}
                     disabled={isGenerationBusy}
-                    placeholder={`Describe the ${aiContentType} you want to generate`}
+                    placeholder={
+                      aiContentType === 'audio'
+                        ? 'Enter the text you want converted to audio'
+                        : `Describe the ${aiContentType} you want to generate`
+                    }
                     className="block w-full rounded-md border border-slate-700 bg-slate-800 p-3 text-sm text-white placeholder-slate-500 focus:border-violet-500 focus:outline-none"
                   />
                 </div>
+
+                {aiContentType === 'audio' && (
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between">
+                      <label className="block text-sm font-medium text-slate-300">ElevenLabs Voice</label>
+                      {selectedVoice && (
+                        <button
+                          type="button"
+                          onClick={() => setSelectedVoice(null)}
+                          className="text-xs font-medium text-slate-400 transition-colors hover:text-white"
+                          disabled={isGenerationBusy}
+                        >
+                          Clear
+                        </button>
+                      )}
+                    </div>
+
+                    {selectedVoice ? (
+                      <div className="rounded-xl border border-violet-500/30 bg-violet-500/10 p-4">
+                        <div className="flex items-start justify-between gap-4">
+                          <div className="min-w-0">
+                            <p className="truncate text-sm font-semibold text-white">{selectedVoice.name}</p>
+                            {(selectedVoice.description || [selectedVoice.gender, selectedVoice.age, selectedVoice.accent || selectedVoice.language || selectedVoice.locale].filter(Boolean).join(' • ')) && (
+                              <p className="mt-1 text-xs text-slate-300">
+                                {selectedVoice.description || [selectedVoice.gender, selectedVoice.age, selectedVoice.accent || selectedVoice.language || selectedVoice.locale].filter(Boolean).join(' • ')}
+                              </p>
+                            )}
+                          </div>
+                          <span className="rounded-full border border-violet-500/30 bg-violet-500/15 px-2 py-1 text-[11px] font-medium text-violet-200">
+                            Selected
+                          </span>
+                        </div>
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={() => setShowVoicePickerModal(true)}
+                            disabled={isGenerationBusy}
+                          >
+                            Change Voice
+                          </Button>
+                        </div>
+                      </div>
+                    ) : (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="w-full justify-between"
+                        onClick={() => setShowVoicePickerModal(true)}
+                        disabled={isGenerationBusy}
+                      >
+                        <span>Select ElevenLabs Voice</span>
+                        <ChevronRight className="h-4 w-4" />
+                      </Button>
+                    )}
+                  </div>
+                )}
 
                 {aiContentType !== 'audio' && (
                   <div>
