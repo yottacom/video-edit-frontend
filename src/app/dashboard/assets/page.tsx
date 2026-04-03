@@ -109,6 +109,24 @@ function buildGeneratedAssetTitle(prompt: string, assetType: AssetType) {
     : trimmedPrompt;
 }
 
+function getDownloadFilename(asset: Asset) {
+  const trimmedTitle = asset.title.trim();
+  const fallbackName = trimmedTitle || `${asset.type}-asset`;
+
+  if (/\.[a-z0-9]{2,5}$/i.test(fallbackName) || !asset.url) {
+    return fallbackName;
+  }
+
+  try {
+    const pathname = new URL(asset.url).pathname;
+    const extensionMatch = pathname.match(/\.[a-z0-9]{2,5}$/i);
+
+    return extensionMatch ? `${fallbackName}${extensionMatch[0]}` : fallbackName;
+  } catch {
+    return fallbackName;
+  }
+}
+
 function getAssetTypeLabel(type: Asset['type']) {
   switch (type) {
     case 'image':
@@ -317,6 +335,7 @@ export default function AssetsPage() {
   const [refreshingAssets, setRefreshingAssets] = useState(false);
   const [assetToDelete, setAssetToDelete] = useState<Asset | null>(null);
   const [deletingAssetId, setDeletingAssetId] = useState<string | null>(null);
+  const [downloadingAssetId, setDownloadingAssetId] = useState<string | null>(null);
 
   // Upload Modal State
   const [showUploadModal, setShowUploadModal] = useState(false);
@@ -418,6 +437,47 @@ export default function AssetsPage() {
       setRefreshingAssets(false);
     }
   }, [assetTypeFilter, debouncedSearch, page, sourceTypeFilter]);
+
+  const handleDownloadAsset = useCallback(async (asset: Asset) => {
+    if (!asset.url) {
+      return;
+    }
+
+    const filename = getDownloadFilename(asset);
+    setDownloadingAssetId(asset.id);
+
+    try {
+      const response = await fetch(asset.url);
+
+      if (!response.ok) {
+        throw new Error(`Download failed with status ${response.status}`);
+      }
+
+      const blob = await response.blob();
+      const objectUrl = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+
+      link.href = objectUrl;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(objectUrl);
+    } catch (error) {
+      console.error('Failed to download asset:', error);
+
+      const link = document.createElement('a');
+      link.href = asset.url;
+      link.download = filename;
+      link.target = '_blank';
+      link.rel = 'noopener noreferrer';
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    } finally {
+      setDownloadingAssetId((currentId) => (currentId === asset.id ? null : currentId));
+    }
+  }, []);
 
   useEffect(() => {
     void loadAssets();
@@ -1974,12 +2034,17 @@ export default function AssetsPage() {
               </div>
 
               <div className="flex flex-wrap gap-3 mt-4">
-                <a href={showVideoPlayerModal.url || '#'} download>
-                  <Button variant="outline">
-                    <Download className="h-4 w-4" />
-                    Download Original
-                  </Button>
-                </a>
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    void handleDownloadAsset(showVideoPlayerModal);
+                  }}
+                  loading={downloadingAssetId === showVideoPlayerModal.id}
+                  disabled={!showVideoPlayerModal.url}
+                >
+                  <Download className="h-4 w-4" />
+                  Download Original
+                </Button>
                 <Button
                   variant="danger"
                   onClick={() => {
@@ -2027,12 +2092,17 @@ export default function AssetsPage() {
               </div>
 
               <div className="flex flex-wrap gap-3">
-                <a href={showImageModal.url || '#'} download>
-                  <Button variant="outline">
-                    <Download className="h-4 w-4" />
-                    Download Image
-                  </Button>
-                </a>
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    void handleDownloadAsset(showImageModal);
+                  }}
+                  loading={downloadingAssetId === showImageModal.id}
+                  disabled={!showImageModal.url}
+                >
+                  <Download className="h-4 w-4" />
+                  Download Image
+                </Button>
                 <Button
                   variant="danger"
                   onClick={() => {
@@ -2088,12 +2158,17 @@ export default function AssetsPage() {
               />
 
               <div className="flex flex-wrap gap-3">
-                <a href={showAudioPlayerModal.url || '#'} download>
-                  <Button variant="outline">
-                    <Download className="h-4 w-4" />
-                    Download Audio
-                  </Button>
-                </a>
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    void handleDownloadAsset(showAudioPlayerModal);
+                  }}
+                  loading={downloadingAssetId === showAudioPlayerModal.id}
+                  disabled={!showAudioPlayerModal.url}
+                >
+                  <Download className="h-4 w-4" />
+                  Download Audio
+                </Button>
                 <Button
                   variant="danger"
                   onClick={() => {
@@ -2444,17 +2519,20 @@ export default function AssetsPage() {
                         View Image
                       </Button>
                     )}
-                    <a
-                      href={asset.url || '#'}
-                      download={asset.title}
-                      className="min-w-0"
-                      onClick={(event) => event.stopPropagation()}
+                    <Button
+                      variant="outline"
+                      className="w-full min-w-0 whitespace-nowrap px-3"
+                      size="sm"
+                      loading={downloadingAssetId === asset.id}
+                      disabled={!asset.url}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        void handleDownloadAsset(asset);
+                      }}
                     >
-                      <Button variant="outline" className="w-full min-w-0 whitespace-nowrap px-3" size="sm" disabled={!asset.url}>
-                        <Download className="h-4 w-4" />
-                        Download
-                      </Button>
-                    </a>
+                      <Download className="h-4 w-4" />
+                      Download
+                    </Button>
 
                     <button
                       onClick={(event) => {
