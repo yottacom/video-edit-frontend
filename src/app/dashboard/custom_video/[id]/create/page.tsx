@@ -322,6 +322,7 @@ const AssetPicker: React.FC<{
   pollingGeneration: boolean;
   generationJob: AssetGenerationJobResponse | null;
   generationError: string | null;
+  generationSuccessCount: number;
   allowedTypes?: AssetType[];
   onSearchChange: (value: string) => void;
   onAssetTypeFilterChange: (value: AssetType | 'all') => void;
@@ -344,6 +345,7 @@ const AssetPicker: React.FC<{
   onSelectedBaseImageChange: (asset: Asset | null) => void;
   onReferenceImagesUpload: (files: File[]) => void;
   onGenerate: () => void;
+  onDeleteAsset: (asset: Asset) => Promise<void>;
   selectedVoice: ElevenLabsVoice | null;
   voices: ElevenLabsVoice[];
   loadingVoices: boolean;
@@ -387,6 +389,7 @@ const AssetPicker: React.FC<{
   pollingGeneration,
   generationJob,
   generationError,
+  generationSuccessCount,
   allowedTypes,
   onSearchChange,
   onAssetTypeFilterChange,
@@ -409,6 +412,7 @@ const AssetPicker: React.FC<{
   onSelectedBaseImageChange,
   onReferenceImagesUpload,
   onGenerate,
+  onDeleteAsset,
   selectedVoice,
   voices,
   loadingVoices,
@@ -428,7 +432,10 @@ const AssetPicker: React.FC<{
   const [showBaseImagePickerDialog, setShowBaseImagePickerDialog] = useState(false);
   const [assetSelectionSearch, setAssetSelectionSearch] = useState('');
   const [previewAsset, setPreviewAsset] = useState<Asset | null>(null);
+  const [deletingAssetId, setDeletingAssetId] = useState<string | null>(null);
   const referenceUploadInputRef = useRef<HTMLInputElement>(null);
+  const lastHandledGenerationSuccessCountRef = useRef(generationSuccessCount);
+  const onVoicePickerCloseRef = useRef(onVoicePickerClose);
   const filteredAssets = assets.filter((asset) => !allowedTypes || allowedTypes.includes(asset.type));
   const availableAssetTypes = allowedTypes && allowedTypes.length > 0
     ? allowedTypes
@@ -485,6 +492,41 @@ const AssetPicker: React.FC<{
       onAiContentTypeChange(currentAiContentType);
     }
   }, [aiContentType, currentAiContentType, onAiContentTypeChange]);
+
+  useEffect(() => {
+    onVoicePickerCloseRef.current = onVoicePickerClose;
+  }, [onVoicePickerClose]);
+
+  useEffect(() => {
+    if (generationSuccessCount <= lastHandledGenerationSuccessCountRef.current) {
+      return;
+    }
+
+    lastHandledGenerationSuccessCountRef.current = generationSuccessCount;
+    setShowGenerateDialog(false);
+    setShowReferencePickerDialog(false);
+    setShowBaseImagePickerDialog(false);
+    onVoicePickerCloseRef.current();
+  }, [generationSuccessCount]);
+
+  const handleDeleteAsset = useCallback(async (asset: Asset) => {
+    const confirmed = window.confirm(`Delete "${asset.title}" from your assets?`);
+    if (!confirmed) {
+      return;
+    }
+
+    setDeletingAssetId(asset.id);
+
+    try {
+      await onDeleteAsset(asset);
+      setPreviewAsset((currentAsset) => (currentAsset?.id === asset.id ? null : currentAsset));
+    } catch (error) {
+      console.error('Failed to delete asset from picker:', error);
+      alert(getApiErrorMessage(error, 'Failed to delete asset.'));
+    } finally {
+      setDeletingAssetId(null);
+    }
+  }, [onDeleteAsset]);
 
   if (!isOpen) return null;
 
@@ -672,6 +714,22 @@ const AssetPicker: React.FC<{
                             Preview
                           </button>
                         )}
+                        <button
+                          type="button"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            void handleDeleteAsset(asset);
+                          }}
+                          disabled={deletingAssetId === asset.id}
+                          className="inline-flex items-center gap-1 text-red-300 transition-colors hover:text-red-200 disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          {deletingAssetId === asset.id ? (
+                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          ) : (
+                            <Trash2 className="h-3.5 w-3.5" />
+                          )}
+                          Delete
+                        </button>
                         <span className="inline-flex items-center gap-1 text-violet-300">
                           <ChevronRight className="h-3.5 w-3.5" />
                           Select
@@ -1940,6 +1998,7 @@ const [hasLoadedBackgroundTracksOnce, setHasLoadedBackgroundTracksOnce] = useSta
   const [pickerPollingGeneration, setPickerPollingGeneration] = useState(false);
   const [pickerGenerationJob, setPickerGenerationJob] = useState<AssetGenerationJobResponse | null>(null);
   const [pickerGenerationError, setPickerGenerationError] = useState<string | null>(null);
+  const [pickerGenerationSuccessCount, setPickerGenerationSuccessCount] = useState(0);
   const [pickerSelectedVoice, setPickerSelectedVoice] = useState<ElevenLabsVoice | null>(null);
   const [pickerVoices, setPickerVoices] = useState<ElevenLabsVoice[]>([]);
   const [pickerLoadingVoices, setPickerLoadingVoices] = useState(false);
@@ -2512,7 +2571,9 @@ const [hasLoadedBackgroundTracksOnce, setHasLoadedBackgroundTracksOnce] = useSta
     setPickerSearchInput('');
     setDebouncedPickerSearch('');
     setPickerSourceTypeFilter('all');
-    setPickerAssetTypeFilter(allowedTypes && allowedTypes.length > 0 ? allowedTypes[0] : 'all');
+    setPickerAssetTypeFilter(
+      allowedTypes && allowedTypes.length === 1 ? allowedTypes[0] : 'all'
+    );
     setPickerPage(1);
     resetPickerUploadState();
     resetPickerGenerationState(nextContentType);
@@ -2653,6 +2714,26 @@ const [hasLoadedBackgroundTracksOnce, setHasLoadedBackgroundTracksOnce] = useSta
     }
   }, [loadPickerAssets, pickerPage]);
 
+  const handleDeletePickerAsset = useCallback(async (asset: Asset) => {
+    await assetsApi.delete(asset.id);
+
+    setPickerAssets((currentAssets) => currentAssets.filter((currentAsset) => currentAsset.id !== asset.id));
+    setLibraryAssets((currentAssets) => currentAssets.filter((currentAsset) => currentAsset.id !== asset.id));
+    setPickerSelectedReferenceImages((currentAssets) =>
+      currentAssets.filter((currentAsset) => currentAsset.id !== asset.id)
+    );
+    setPickerSelectedBaseImage((currentAsset) =>
+      currentAsset?.id === asset.id ? null : currentAsset
+    );
+
+    if (pickerAssets.length === 1 && pickerPage > 1) {
+      setPickerPage((currentPage) => currentPage - 1);
+      return;
+    }
+
+    await loadPickerAssets('refresh');
+  }, [loadPickerAssets, pickerAssets.length, pickerPage]);
+
   const handlePickerGenerate = useCallback(async () => {
     const trimmedPrompt = pickerAiPrompt.trim();
     const trimmedMotionPrompt = pickerAiMotionPrompt.trim();
@@ -2738,6 +2819,7 @@ const [hasLoadedBackgroundTracksOnce, setHasLoadedBackgroundTracksOnce] = useSta
         const mappedAsset = mapLibraryAsset(response.asset);
         setLibraryAssets((currentAssets) => mergeAssetsById(currentAssets, [mappedAsset]));
         resetPickerGenerationState();
+        setPickerGenerationSuccessCount((currentCount) => currentCount + 1);
 
         if (pickerPage === 1) {
           await loadPickerAssets('refresh');
@@ -2957,9 +3039,10 @@ const [hasLoadedBackgroundTracksOnce, setHasLoadedBackgroundTracksOnce] = useSta
           const mappedAsset = mapLibraryAsset(result.asset);
           setLibraryAssets((currentAssets) => mergeAssetsById(currentAssets, [mappedAsset]));
           setPickerPollingGeneration(false);
-          setPickerAiPrompt('');
+          resetPickerGenerationState();
           setPickerGenerationJob(null);
           setPickerGenerationError(null);
+          setPickerGenerationSuccessCount((currentCount) => currentCount + 1);
 
           if (pickerPage === 1) {
             await loadPickerAssets('refresh');
@@ -2994,7 +3077,7 @@ const [hasLoadedBackgroundTracksOnce, setHasLoadedBackgroundTracksOnce] = useSta
     return () => {
       cancelled = true;
     };
-  }, [loadPickerAssets, pickerGenerationJob?.job_id, pickerGenerationJob?.poll_url, pickerPage, pickerPollingGeneration]);
+  }, [loadPickerAssets, pickerGenerationJob?.job_id, pickerGenerationJob?.poll_url, pickerPage, pickerPollingGeneration, resetPickerGenerationState]);
 
   useEffect(() => {
     if (!routeId || routeId === customVideoId || loadingLibraryAssets) {
@@ -3710,6 +3793,7 @@ const [hasLoadedBackgroundTracksOnce, setHasLoadedBackgroundTracksOnce] = useSta
         pollingGeneration={pickerPollingGeneration}
         generationJob={pickerGenerationJob}
         generationError={pickerGenerationError}
+        generationSuccessCount={pickerGenerationSuccessCount}
         allowedTypes={pickerAllowedTypes}
         onSearchChange={setPickerSearchInput}
         onAssetTypeFilterChange={setPickerAssetTypeFilter}
@@ -3736,6 +3820,7 @@ const [hasLoadedBackgroundTracksOnce, setHasLoadedBackgroundTracksOnce] = useSta
         onSelectedBaseImageChange={setPickerSelectedBaseImage}
         onReferenceImagesUpload={(files) => { void handlePickerReferenceImageUpload(files); }}
         onGenerate={() => { void handlePickerGenerate(); }}
+        onDeleteAsset={(asset) => handleDeletePickerAsset(asset)}
         selectedVoice={pickerSelectedVoice}
         voices={pickerVoices}
         loadingVoices={pickerLoadingVoices}
