@@ -18,7 +18,8 @@ import { VideoThumbnail } from '@/components/media/VideoThumbnail';
 import { Card, CardContent } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
-import { sourceVideosApi, uploadsApi } from '@/lib/api';
+import { Toast } from '@/components/ui/Toast';
+import { getApiErrorMessage, sourceVideosApi, uploadsApi } from '@/lib/api';
 import { MultipartListPart, SourceVideo, UploadItem } from '@/types';
 
 const LARGE_UPLOAD_THRESHOLD_BYTES = 100 * 1024 * 1024;
@@ -27,6 +28,12 @@ const MULTIPART_MAX_RETRIES = 4;
 const MULTIPART_CONCURRENCY = 6;
 
 type UploadMode = 'direct' | 'multipart' | null;
+type ToastState = {
+  open: boolean;
+  title?: string;
+  message: string;
+  variant: 'error' | 'success' | 'info';
+};
 
 interface MultipartUploadSession {
   file: File | null;
@@ -42,6 +49,16 @@ interface MultipartUploadSession {
   uploadedBytes: number;
   perPart: Map<number, number>;
 }
+
+type AudioTrackAwareVideoElement = HTMLVideoElement & {
+  mozHasAudio?: boolean;
+  webkitAudioDecodedByteCount?: number;
+  audioTracks?: {
+    length: number;
+  };
+  captureStream?: () => MediaStream;
+  mozCaptureStream?: () => MediaStream;
+};
 
 function createMultipartSession(): MultipartUploadSession {
   return {
@@ -70,6 +87,84 @@ function getErrorMessage(error: unknown) {
   return 'Something went wrong during upload.';
 }
 
+function detectVideoHasAudio(video: AudioTrackAwareVideoElement) {
+  const hasNativeAudioTracks = typeof video.audioTracks?.length === 'number' && video.audioTracks.length > 0;
+  const hasMozillaAudio = video.mozHasAudio === true;
+  const hasDecodedAudio = typeof video.webkitAudioDecodedByteCount === 'number' && video.webkitAudioDecodedByteCount > 0;
+
+  let hasCapturedAudio = false;
+  const captureStream = video.captureStream || video.mozCaptureStream;
+
+  if (typeof captureStream === 'function') {
+    try {
+      const stream = captureStream.call(video);
+      hasCapturedAudio = stream.getAudioTracks().length > 0;
+      stream.getTracks().forEach((track) => track.stop());
+    } catch {
+      hasCapturedAudio = false;
+    }
+  }
+
+  return hasNativeAudioTracks || hasMozillaAudio || hasDecodedAudio || hasCapturedAudio;
+}
+
+function validateVideoFileHasAudio(file: File): Promise<boolean> {
+  return new Promise((resolve, reject) => {
+    const objectUrl = URL.createObjectURL(file);
+    const video = document.createElement('video') as AudioTrackAwareVideoElement;
+    let settled = false;
+
+    const cleanup = () => {
+      video.pause();
+      video.removeAttribute('src');
+      video.load();
+      URL.revokeObjectURL(objectUrl);
+    };
+
+    const finish = (result: boolean, error?: Error) => {
+      if (settled) return;
+      settled = true;
+      window.clearTimeout(timeoutId);
+      cleanup();
+
+      if (error) {
+        reject(error);
+        return;
+      }
+
+      resolve(result);
+    };
+
+    const inspectAudio = async () => {
+      try {
+        await video.play();
+      } catch {
+        // Some browsers still expose track metadata without allowing autoplay.
+      } finally {
+        window.setTimeout(() => {
+          finish(detectVideoHasAudio(video));
+        }, 150);
+      }
+    };
+
+    const timeoutId = window.setTimeout(() => {
+      finish(false, new Error('Audio track detection timed out.'));
+    }, 5000);
+
+    video.preload = 'auto';
+    video.muted = true;
+    video.playsInline = true;
+    video.addEventListener('loadeddata', () => {
+      void inspectAudio();
+    }, { once: true });
+    video.addEventListener('error', () => {
+      finish(false, new Error('Unable to read this video file.'));
+    }, { once: true });
+    video.src = objectUrl;
+    video.load();
+  });
+}
+
 export default function VideosPage() {
   const [videos, setVideos] = useState<SourceVideo[]>([]);
   const [loading, setLoading] = useState(true);
@@ -83,13 +178,23 @@ export default function VideosPage() {
   const [uploadModalOpen, setUploadModalOpen] = useState(false);
   const [selectedUploadFile, setSelectedUploadFile] = useState<File | null>(null);
   const [selectedUploadPreviewUrl, setSelectedUploadPreviewUrl] = useState<string | null>(null);
+  const [selectedUploadHasAudio, setSelectedUploadHasAudio] = useState<boolean | null>(null);
+  const [checkingSelectedUploadAudio, setCheckingSelectedUploadAudio] = useState(false);
+  const [selectedUploadAudioMessage, setSelectedUploadAudioMessage] = useState('');
   const [previewVideo, setPreviewVideo] = useState<SourceVideo | null>(null);
   const [videoToDelete, setVideoToDelete] = useState<SourceVideo | null>(null);
   const [deletingVideoId, setDeletingVideoId] = useState<string | null>(null);
+  const [toast, setToast] = useState<ToastState>({
+    open: false,
+    message: '',
+    variant: 'info',
+  });
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const uploadStateRef = useRef<MultipartUploadSession>(createMultipartSession());
   const uploadPreviewUrlRef = useRef<string | null>(null);
+  const audioValidationRequestRef = useRef(0);
+  const toastTimeoutRef = useRef<number | null>(null);
 
   const loadVideos = async () => {
     try {
@@ -111,8 +216,39 @@ export default function VideosPage() {
       if (uploadPreviewUrlRef.current) {
         URL.revokeObjectURL(uploadPreviewUrlRef.current);
       }
+
+      if (toastTimeoutRef.current) {
+        window.clearTimeout(toastTimeoutRef.current);
+      }
     };
   }, []);
+
+  const showToast = (message: string, variant: ToastState['variant'], title?: string) => {
+    if (toastTimeoutRef.current) {
+      window.clearTimeout(toastTimeoutRef.current);
+    }
+
+    setToast({
+      open: true,
+      title,
+      message,
+      variant,
+    });
+
+    toastTimeoutRef.current = window.setTimeout(() => {
+      setToast((currentToast) => ({ ...currentToast, open: false }));
+      toastTimeoutRef.current = null;
+    }, 5000);
+  };
+
+  const closeToast = () => {
+    if (toastTimeoutRef.current) {
+      window.clearTimeout(toastTimeoutRef.current);
+      toastTimeoutRef.current = null;
+    }
+
+    setToast((currentToast) => ({ ...currentToast, open: false }));
+  };
 
   useEffect(() => {
     if (!previewVideo) return;
@@ -138,6 +274,8 @@ export default function VideosPage() {
 
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape' && !uploading) {
+        audioValidationRequestRef.current += 1;
+
         if (uploadPreviewUrlRef.current) {
           URL.revokeObjectURL(uploadPreviewUrlRef.current);
           uploadPreviewUrlRef.current = null;
@@ -146,6 +284,9 @@ export default function VideosPage() {
         setUploadModalOpen(false);
         setSelectedUploadFile(null);
         setSelectedUploadPreviewUrl(null);
+        setSelectedUploadHasAudio(null);
+        setCheckingSelectedUploadAudio(false);
+        setSelectedUploadAudioMessage('');
         setDragOver(false);
         resetFileInput();
         setUploadStatus('');
@@ -181,6 +322,9 @@ export default function VideosPage() {
     if (!file) {
       setSelectedUploadFile(null);
       setSelectedUploadPreviewUrl(null);
+      setSelectedUploadHasAudio(null);
+      setCheckingSelectedUploadAudio(false);
+      setSelectedUploadAudioMessage('');
       return;
     }
 
@@ -191,6 +335,7 @@ export default function VideosPage() {
   };
 
   const clearSelectedUpload = () => {
+    audioValidationRequestRef.current += 1;
     updateSelectedUploadFile(null);
     setDragOver(false);
     resetFileInput();
@@ -206,10 +351,48 @@ export default function VideosPage() {
     setUploadMode(null);
     setMultipartPaused(false);
     setLastUpload(null);
+    setSelectedUploadHasAudio(null);
+    setCheckingSelectedUploadAudio(false);
+    setSelectedUploadAudioMessage('');
   };
 
   const openUploadModal = () => {
     setUploadModalOpen(true);
+  };
+
+  const validateSelectedUploadAudio = async (file: File) => {
+    const requestId = audioValidationRequestRef.current + 1;
+    audioValidationRequestRef.current = requestId;
+    setCheckingSelectedUploadAudio(true);
+    setSelectedUploadHasAudio(null);
+    setSelectedUploadAudioMessage('Checking the selected video for an audio track...');
+
+    try {
+      const hasAudio = await validateVideoFileHasAudio(file);
+
+      if (audioValidationRequestRef.current !== requestId) {
+        return;
+      }
+
+      setSelectedUploadHasAudio(hasAudio);
+      setSelectedUploadAudioMessage(
+        hasAudio
+          ? 'Audio track detected. This video is ready to upload.'
+          : 'No audio track was detected. Please choose a source video that includes sound.'
+      );
+    } catch (error) {
+      if (audioValidationRequestRef.current !== requestId) {
+        return;
+      }
+
+      console.error('Failed to validate source video audio:', error);
+      setSelectedUploadHasAudio(false);
+      setSelectedUploadAudioMessage('We could not verify audio in this file. Please choose a video that clearly includes sound.');
+    } finally {
+      if (audioValidationRequestRef.current === requestId) {
+        setCheckingSelectedUploadAudio(false);
+      }
+    }
   };
 
   const finishUpload = () => {
@@ -449,6 +632,7 @@ export default function VideosPage() {
     }
 
     updateSelectedUploadFile(file);
+    void validateSelectedUploadAudio(file);
     setUploadStatus('');
     setUploadProgress(0);
     setUploadMode(null);
@@ -461,6 +645,12 @@ export default function VideosPage() {
 
   const handleUpload = async () => {
     if (!selectedUploadFile || uploading) return;
+    if (checkingSelectedUploadAudio) return;
+
+    if (selectedUploadHasAudio !== true) {
+      alert('Please select a source video that contains audio before uploading.');
+      return;
+    }
 
     if (selectedUploadFile.size > LARGE_UPLOAD_THRESHOLD_BYTES) {
       await startMultipartUpload(selectedUploadFile);
@@ -496,6 +686,7 @@ export default function VideosPage() {
       setVideoToDelete(null);
     } catch (error) {
       console.error('Failed to delete:', error);
+      showToast(getApiErrorMessage(error, 'Failed to delete source video.'), 'error', 'Delete Failed');
     } finally {
       setDeletingVideoId(null);
     }
@@ -524,6 +715,14 @@ export default function VideosPage() {
 
   return (
     <DashboardLayout>
+      <Toast
+        open={toast.open}
+        variant={toast.variant}
+        title={toast.title}
+        message={toast.message}
+        onClose={closeToast}
+      />
+
       <ConfirmDialog
         open={!!videoToDelete}
         title="Delete video?"
@@ -575,7 +774,7 @@ export default function VideosPage() {
                 </p>
                 <h2 className="mt-1 text-xl font-semibold text-white">Review your file before uploading</h2>
                 <p className="mt-2 text-sm text-slate-400">
-                  Drag a video here or browse from your device, preview it, then start the upload when you are ready.
+                  Drag a video here or browse from your device, preview it, and upload it when you are ready. Source videos must include sound so narration and scene timing can be processed correctly.
                 </p>
               </div>
 
@@ -639,6 +838,9 @@ export default function VideosPage() {
                   <p className="text-slate-500 text-sm mt-1">
                     Files larger than {Math.round(LARGE_UPLOAD_THRESHOLD_BYTES / (1024 * 1024))} MB automatically use multipart upload.
                   </p>
+                  <p className="mt-2 text-sm text-amber-300">
+                    Please upload a video with audio. Silent videos are blocked and will not be sent to the backend.
+                  </p>
                 </div>
 
                 {selectedUploadFile && (
@@ -648,16 +850,29 @@ export default function VideosPage() {
                       <span>{formatSize(selectedUploadFile.size)}</span>
                       <span>{selectedUploadFile.type || 'video/*'}</span>
                     </div>
+                    {selectedUploadAudioMessage && (
+                      <p
+                        className={`mt-3 text-sm ${
+                          checkingSelectedUploadAudio
+                            ? 'text-amber-300'
+                            : selectedUploadHasAudio
+                              ? 'text-emerald-300'
+                              : 'text-red-300'
+                        }`}
+                      >
+                        {selectedUploadAudioMessage}
+                      </p>
+                    )}
                     <div className="mt-4 flex flex-wrap gap-3">
                       <Button
                         onClick={() => {
                           void handleUpload();
                         }}
                         loading={uploading}
-                        disabled={!selectedUploadFile}
+                        disabled={!selectedUploadFile || checkingSelectedUploadAudio || selectedUploadHasAudio !== true}
                       >
                         <Upload className="w-4 h-4" />
-                        {uploading ? 'Uploading...' : 'Start Upload'}
+                        {uploading ? 'Uploading...' : checkingSelectedUploadAudio ? 'Checking Audio...' : 'Start Upload'}
                       </Button>
                       <Button
                         variant="secondary"
@@ -728,6 +943,9 @@ export default function VideosPage() {
               <div className="rounded-3xl border border-slate-800 bg-slate-950/40 p-4 lg:p-5">
                 <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">
                   Video Preview
+                </p>
+                <p className="mt-2 text-sm text-slate-400">
+                  We verify that the selected source video contains an audio track before allowing upload.
                 </p>
                 <div className="mt-4 overflow-hidden rounded-2xl border border-slate-800 bg-black">
                   {selectedUploadPreviewUrl ? (
