@@ -2,19 +2,30 @@
 import axios, { InternalAxiosRequestConfig } from 'axios';
 import { useDebugStore } from './debug-store';
 import {
+  AdFormatListResponse,
+  AdTemplateListResponse,
   AssetItem,
   AssetGenerationJobResponse,
   AssetPresignedUploadResponse,
   AssetType,
+  Brand,
+  BrandListResponse,
+  BrandPayload,
   CustomVideo,
   CustomVideoScene,
   CustomVideoScenePayload,
   EditProject,
   ElevenLabsVoiceListResponse,
+  GenerateFromPromptPayload,
+  GenerateFromPromptResponse,
+  JobStatusResponse,
   MultipartListPart,
   MultipartStartResponse,
   PaginatedResponse,
   PartUrlResponse,
+  Persona,
+  PersonaListResponse,
+  PersonaPayload,
   ProjectConfig,
   ProjectMainEditPayload,
   ProjectShortEditPayload,
@@ -239,6 +250,20 @@ export const authApi = {
     });
     return res.data;
   },
+
+  forgotPassword: async (email: string) => {
+    const res = await api.post('/auth/forgot-password', { email });
+    return res.data;
+  },
+
+  resetPassword: async (email: string, verificationCode: string, password: string) => {
+    const res = await api.post('/auth/reset-password', {
+      email,
+      verification_code: verificationCode,
+      password,
+    });
+    return res.data;
+  },
   
   me: async (token?: string) => {
     // Allow passing token directly for immediate use after login
@@ -334,6 +359,11 @@ export const assetsApi = {
     return res.data;
   },
 
+  get: async (assetId: string): Promise<AssetItem> => {
+    const res = await api.get(`/api/assets/${assetId}`);
+    return res.data;
+  },
+
   getPresignedUploadUrl: async (payload: {
     filename: string;
     content_type?: string;
@@ -418,6 +448,87 @@ export const assetsApi = {
 };
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// BRANDS API
+// ═══════════════════════════════════════════════════════════════════════════════
+
+export const brandsApi = {
+  list: async (): Promise<BrandListResponse> => {
+    const res = await api.get('/api/brands');
+    return res.data;
+  },
+
+  create: async (payload: BrandPayload): Promise<Brand> => {
+    const res = await api.post('/api/brands', payload);
+    return res.data;
+  },
+
+  get: async (brandId: string): Promise<Brand> => {
+    const res = await api.get(`/api/brands/${brandId}`);
+    return res.data;
+  },
+
+  update: async (brandId: string, payload: Partial<BrandPayload>): Promise<Brand> => {
+    const res = await api.patch(`/api/brands/${brandId}`, payload);
+    return res.data;
+  },
+
+  remove: async (brandId: string) => {
+    const res = await api.delete(`/api/brands/${brandId}`);
+    return res.data;
+  },
+};
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// PERSONAS API
+// ═══════════════════════════════════════════════════════════════════════════════
+
+export const personasApi = {
+  list: async (): Promise<PersonaListResponse> => {
+    const res = await api.get('/api/personas');
+    return res.data;
+  },
+
+  create: async (payload: PersonaPayload): Promise<Persona> => {
+    const res = await api.post('/api/personas', payload);
+    return res.data;
+  },
+
+  get: async (personaId: string): Promise<Persona> => {
+    const res = await api.get(`/api/personas/${personaId}`);
+    return res.data;
+  },
+
+  update: async (personaId: string, payload: Partial<PersonaPayload>): Promise<Persona> => {
+    const res = await api.patch(`/api/personas/${personaId}`, payload);
+    return res.data;
+  },
+
+  clone: async (personaId: string): Promise<Persona> => {
+    const res = await api.post(`/api/personas/${personaId}/clone`);
+    return res.data;
+  },
+
+  remove: async (personaId: string) => {
+    const res = await api.delete(`/api/personas/${personaId}`);
+    return res.data;
+  },
+};
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// JOBS API
+// ═══════════════════════════════════════════════════════════════════════════════
+
+export const jobsApi = {
+  getResult: async <TResponse = Record<string, unknown>>(
+    jobRequestId: string
+  ): Promise<JobStatusResponse<TResponse>> => {
+    // NOTE: jobs router is mounted at /jobs, not /api/jobs
+    const res = await api.get(`/jobs/${jobRequestId}`);
+    return res.data;
+  },
+};
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // CUSTOM VIDEOS API
 // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -443,6 +554,23 @@ export const customVideosApi = {
     background_music_mood?: string;
   }): Promise<CustomVideo> => {
     const res = await api.post('/api/custom-videos/start', payload);
+    return res.data;
+  },
+
+  generateFromPrompt: async (
+    payload: GenerateFromPromptPayload
+  ): Promise<GenerateFromPromptResponse> => {
+    const res = await api.post('/api/custom-videos/generate-from-prompt', payload);
+    return res.data;
+  },
+
+  listAdFormats: async (): Promise<AdFormatListResponse> => {
+    const res = await api.get('/api/custom-videos/ad-formats');
+    return res.data;
+  },
+
+  listAdTemplates: async (): Promise<AdTemplateListResponse> => {
+    const res = await api.get('/api/custom-videos/ad-templates');
     return res.data;
   },
 

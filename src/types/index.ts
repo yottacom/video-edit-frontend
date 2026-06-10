@@ -95,6 +95,67 @@ export interface ElevenLabsVoiceListResponse {
   total_count: number;
 }
 
+export interface Brand {
+  id: string;
+  user_id: number;
+  name: string;
+  product_description: string | null;
+  tone: string | null;
+  logo_asset_id: string | null;
+  primary_color: string | null;
+  secondary_color: string | null;
+  default_voice_id: string | null;
+  default_subtitle_style: string | null;
+  default_music_mood: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface BrandPayload {
+  name: string;
+  product_description?: string | null;
+  tone?: string | null;
+  logo_asset_id?: string | null;
+  primary_color?: string | null;
+  secondary_color?: string | null;
+  default_voice_id?: string | null;
+  default_subtitle_style?: string | null;
+  default_music_mood?: string | null;
+}
+
+export interface BrandListResponse {
+  total: number;
+  items: Brand[];
+}
+
+export interface Persona {
+  id: string;
+  user_id: number | null;
+  is_preset: boolean;
+  name: string;
+  personality: string | null;
+  appearance_prompt: string | null;
+  portrait_asset_id: string | null;
+  reference_asset_ids: string[];
+  voice_id: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PersonaPayload {
+  name: string;
+  personality?: string | null;
+  appearance_prompt?: string | null;
+  portrait_asset_id?: string | null;
+  reference_asset_ids?: string[];
+  voice_id?: string | null;
+}
+
+export interface PersonaListResponse {
+  total: number;
+  items: Persona[];
+}
+
 export interface CustomVideoScenePayload {
   order: number;
   title?: string;
@@ -164,16 +225,151 @@ export type CustomVideoStatus = 'draft' | 'finalizing' | 'rendering' | 'complete
 export interface CustomVideo {
   id: string;
   title: string | null;
+  brand_id?: string | null;
   video_type: 'portrait' | 'landscape';
   background_music_mood: string | null;
   status: CustomVideoStatus;
   progress: number;
   scenes: CustomVideoScene[];
   output_url: string | null;
+  output_urls?: string[];
   error_message: string | null;
   render_id?: string | null;
+  current_job_request_id?: string | null;
+  current_job_result_id?: string | null;
+  current_render_id?: string | null;
   created_at?: string;
   updated_at?: string;
+}
+
+export interface GenerateFromPromptPayload {
+  prompt: string;
+  brand_id?: string | null;
+  persona_id?: string | null;
+  ad_format?: string | null;
+  video_type?: 'portrait' | 'landscape';
+  target_duration_s?: number;
+  voice_id?: string | null;
+  auto_render?: boolean;
+}
+
+export interface AdFormat {
+  id: string;
+  name: string;
+  tagline: string;
+  structure: string;
+  best_for: string;
+  recommended_duration_s: number;
+  supports_persona: boolean;
+}
+
+export interface AdFormatListResponse {
+  total: number;
+  items: AdFormat[];
+}
+
+export interface AdTemplate {
+  id: string;
+  name: string;
+  category: string;
+  description: string;
+  ad_format: string;
+  example_prompt: string;
+  recommended_video_type: 'portrait' | 'landscape';
+  recommended_duration_s: number;
+  suggested_persona: boolean;
+  accent: string;
+}
+
+export interface AdTemplateListResponse {
+  total: number;
+  items: AdTemplate[];
+}
+
+export interface GenerateFromPromptResponse {
+  custom_video: CustomVideo;
+  job_request_id: string;
+  job_result_id: string;
+}
+
+export type JobStatus = 'queued' | 'running' | 'finished' | 'failed';
+
+export interface JobStatusResult<TResponse = Record<string, unknown>> {
+  provider: string;
+  provider_job_id: string | null;
+  response: TResponse;
+}
+
+export interface JobStatusResponse<TResponse = Record<string, unknown>> {
+  job_id: string;
+  status: JobStatus;
+  progress: number;
+  error: string | null;
+  result: JobStatusResult<TResponse> | null;
+}
+
+export type GenerateFromPromptStage =
+  | 'queued'
+  | 'planning'
+  | 'planned'
+  | 'generating_assets'
+  | 'building_scenes'
+  | 'generating_voiceover'
+  | 'finalizing'
+  | 'completing'
+  | 'completed'
+  | 'failed';
+
+export interface PlanPreviewAsset {
+  key: string;
+  slot: 'primary' | 'secondary';
+  type: 'image' | 'video';
+  description: string;
+}
+
+export interface PlanPreviewScene {
+  order: number;
+  title: string | null;
+  voiceover_text: string | null;
+  use_avatar: boolean;
+  estimated_duration_s: number | null;
+  assets: PlanPreviewAsset[];
+}
+
+export interface PlanPreview {
+  title: string | null;
+  music_mood: string | null;
+  scenes: PlanPreviewScene[];
+}
+
+export type AssetsBoardStatus = 'generating' | 'done' | 'failed';
+
+export interface AssetsBoardEntry {
+  status: AssetsBoardStatus;
+  thumbnail_url: string | null;
+}
+
+export type AssetsBoard = Record<string, AssetsBoardEntry>;
+
+export interface GenerateFromPromptAutoRender {
+  custom_video_id: string;
+  render_id: string;
+  job_id: string;
+  status: string;
+  progress: number;
+}
+
+export interface GenerateFromPromptJobResponse {
+  stage: GenerateFromPromptStage;
+  custom_video_id: string;
+  assets_done?: number;
+  assets_total?: number;
+  scene_count?: number;
+  asset_count?: number;
+  plan_preview?: PlanPreview;
+  assets_board?: AssetsBoard;
+  auto_render?: GenerateFromPromptAutoRender | null;
+  auto_render_error?: string;
 }
 
 export interface ProjectConfig {

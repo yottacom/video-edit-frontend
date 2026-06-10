@@ -10,17 +10,20 @@ interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
 }
 
 const variants = {
-  primary: 'bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-700 hover:to-indigo-700 text-white shadow-lg shadow-violet-500/25',
-  secondary: 'bg-slate-800 hover:bg-slate-700 text-white',
-  outline: 'border border-slate-700 hover:bg-slate-800 text-slate-300',
-  ghost: 'hover:bg-slate-800 text-slate-300',
-  danger: 'bg-red-600 hover:bg-red-700 text-white',
+  primary:
+    'bg-violet-600 hover:bg-violet-500 text-white ring-1 ring-inset ring-white/10 shadow-sm shadow-violet-950/40',
+  secondary:
+    'bg-white/[0.06] hover:bg-white/[0.1] text-white ring-1 ring-inset ring-white/10',
+  outline:
+    'ring-1 ring-inset ring-white/15 hover:bg-white/[0.05] text-slate-200',
+  ghost: 'hover:bg-white/[0.06] text-slate-300',
+  danger: 'bg-red-600 hover:bg-red-500 text-white ring-1 ring-inset ring-white/10',
 };
 
 const sizes = {
-  sm: 'px-3 py-1.5 text-sm',
-  md: 'px-4 py-2 text-sm',
-  lg: 'px-6 py-3 text-base',
+  sm: 'h-8 px-3 text-sm',
+  md: 'h-10 px-4 text-sm',
+  lg: 'h-12 px-6 text-base',
 };
 
 export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
@@ -29,10 +32,11 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
       <button
         ref={ref}
         className={`
-          inline-flex items-center justify-center gap-2 rounded-lg font-medium
-          transition-all duration-200 ease-out
-          focus:outline-none focus:ring-2 focus:ring-violet-500 focus:ring-offset-2 focus:ring-offset-slate-900
-          disabled:opacity-50 disabled:cursor-not-allowed
+          inline-flex items-center justify-center gap-2 rounded-xl font-medium tracking-tight
+          transition-all duration-200 ease-out select-none
+          active:scale-[0.98]
+          focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/70 focus-visible:ring-offset-2 focus-visible:ring-offset-[#0a0a0d]
+          disabled:opacity-50 disabled:pointer-events-none
           ${variants[variant]}
           ${sizes[size]}
           ${className}
@@ -40,7 +44,7 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
         disabled={disabled || loading}
         {...props}
       >
-        {loading && <Loader2 className="w-4 h-4 animate-spin" />}
+        {loading && <Loader2 className="h-4 w-4 animate-spin" />}
         {children}
       </button>
     );

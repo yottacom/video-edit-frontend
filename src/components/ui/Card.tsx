@@ -12,8 +12,8 @@ export const Card = forwardRef<HTMLDivElement, CardProps>(
       <div
         ref={ref}
         className={`
-          bg-slate-800/50 backdrop-blur-sm border border-slate-700/50 rounded-xl
-          ${hover ? 'hover:border-violet-500/50 hover:shadow-lg hover:shadow-violet-500/10 transition-all duration-300' : ''}
+          rounded-2xl border border-white/[0.07] bg-white/[0.025] backdrop-blur-sm
+          ${hover ? 'transition-all duration-300 ease-out hover:-translate-y-0.5 hover:border-violet-400/30 hover:bg-white/[0.045]' : ''}
           ${className}
         `}
         {...props}
@@ -27,7 +27,7 @@ export const Card = forwardRef<HTMLDivElement, CardProps>(
 Card.displayName = 'Card';
 
 export const CardHeader = ({ className = '', children, ...props }: HTMLAttributes<HTMLDivElement>) => (
-  <div className={`p-6 border-b border-slate-700/50 ${className}`} {...props}>
+  <div className={`p-6 border-b border-white/[0.07] ${className}`} {...props}>
     {children}
   </div>
 );
@@ -39,7 +39,7 @@ export const CardContent = ({ className = '', children, ...props }: HTMLAttribut
 );
 
 export const CardFooter = ({ className = '', children, ...props }: HTMLAttributes<HTMLDivElement>) => (
-  <div className={`p-6 border-t border-slate-700/50 ${className}`} {...props}>
+  <div className={`p-6 border-t border-white/[0.07] ${className}`} {...props}>
     {children}
   </div>
 );

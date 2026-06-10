@@ -106,6 +106,8 @@ export const useDebugStore = create<DebugState>()(
       // Handle storage errors gracefully
       storage: {
         getItem: (name) => {
+          // No localStorage during server-side rendering.
+          if (typeof window === 'undefined') return null;
           try {
             const item = localStorage.getItem(name);
             return item ? JSON.parse(item) : null;
@@ -115,6 +117,7 @@ export const useDebugStore = create<DebugState>()(
           }
         },
         setItem: (name, value) => {
+          if (typeof window === 'undefined') return;
           try {
             localStorage.setItem(name, JSON.stringify(value));
           } catch (error) {
@@ -123,6 +126,7 @@ export const useDebugStore = create<DebugState>()(
           }
         },
         removeItem: (name) => {
+          if (typeof window === 'undefined') return;
           try {
             localStorage.removeItem(name);
           } catch (error) {

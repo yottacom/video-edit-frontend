@@ -1871,8 +1871,9 @@ export default function AssetsPage() {
                         disabled={isGenerationBusy}
                         className="block w-full rounded-md border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-white focus:border-violet-500 focus:ring-violet-500"
                       >
-                        <option value="5">5 seconds</option>
-                        <option value="10">10 seconds</option>
+                        {Array.from({ length: 11 }, (_, i) => i + 2).map((s) => (
+                          <option key={s} value={String(s)}>{s} seconds</option>
+                        ))}
                       </select>
                     </div>
                   ) : aiContentType === 'audio' ? (

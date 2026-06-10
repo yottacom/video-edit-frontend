@@ -3,10 +3,10 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { Sparkles, Mail, Lock, ArrowRight } from 'lucide-react';
+import { Mail, Lock, ArrowRight } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
-import { Card, CardContent } from '@/components/ui/Card';
+import { AuthShell } from '@/components/auth/AuthShell';
 import { authApi } from '@/lib/api';
 import { useAuthStore } from '@/lib/store';
 
@@ -58,71 +58,63 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-950 flex items-center justify-center p-4">
-      {/* Background Effects */}
-      <div className="fixed inset-0 overflow-hidden pointer-events-none">
-        <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-violet-600/20 rounded-full blur-3xl" />
-        <div className="absolute bottom-1/4 right-1/4 w-96 h-96 bg-indigo-600/20 rounded-full blur-3xl" />
-      </div>
-
-      <Card className="w-full max-w-md relative z-10">
-        <CardContent className="p-8">
-          {/* Logo */}
-          <div className="flex flex-col items-center mb-8">
-            <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-violet-600 to-indigo-600 flex items-center justify-center mb-4 shadow-lg shadow-violet-500/25">
-              <Sparkles className="w-8 h-8 text-white" />
-            </div>
-            <h1 className="text-2xl font-bold text-white">Welcome back</h1>
-            <p className="text-slate-400 mt-1">Sign in to your account</p>
+    <AuthShell
+      title="Welcome back"
+      subtitle="Sign in to your studio."
+      footer={
+        <>
+          Don&apos;t have an account?{' '}
+          <Link href="/auth/register" className="font-medium text-violet-400 transition-colors hover:text-violet-300">
+            Create one
+          </Link>
+        </>
+      }
+    >
+      <form onSubmit={handleSubmit} className="space-y-4">
+        {error && (
+          <div className="rounded-xl border border-red-500/20 bg-red-500/10 p-3 text-sm text-red-300">
+            {error}
           </div>
+        )}
 
-          {/* Form */}
-          <form onSubmit={handleSubmit} className="space-y-5">
-            {error && (
-              <div className="p-3 rounded-lg bg-red-500/10 border border-red-500/20 text-red-400 text-sm">
-                {error}
-              </div>
-            )}
+        <div className="relative">
+          <Mail className="pointer-events-none absolute left-3.5 top-1/2 h-5 w-5 -translate-y-1/2 text-slate-500" />
+          <Input
+            type="email"
+            placeholder="Email address"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            className="pl-11"
+            required
+          />
+        </div>
 
-            <div className="relative">
-              <Mail className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-500" />
-              <Input
-                type="email"
-                placeholder="Email address"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                className="pl-12"
-                required
-              />
-            </div>
+        <div className="relative">
+          <Lock className="pointer-events-none absolute left-3.5 top-1/2 h-5 w-5 -translate-y-1/2 text-slate-500" />
+          <Input
+            type="password"
+            placeholder="Password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            className="pl-11"
+            required
+          />
+        </div>
 
-            <div className="relative">
-              <Lock className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-500" />
-              <Input
-                type="password"
-                placeholder="Password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                className="pl-12"
-                required
-              />
-            </div>
+        <div className="flex justify-end">
+          <Link
+            href="/auth/forgot-password"
+            className="text-sm font-medium text-slate-400 transition-colors hover:text-white"
+          >
+            Forgot password?
+          </Link>
+        </div>
 
-            <Button type="submit" className="w-full" size="lg" loading={loading}>
-              Sign In
-              <ArrowRight className="w-5 h-5" />
-            </Button>
-          </form>
-
-          {/* Footer */}
-          <p className="text-center mt-6 text-slate-400">
-            Don&apos;t have an account?{' '}
-            <Link href="/auth/register" className="text-violet-400 hover:text-violet-300 font-medium">
-              Sign up
-            </Link>
-          </p>
-        </CardContent>
-      </Card>
-    </div>
+        <Button type="submit" className="w-full" size="lg" loading={loading}>
+          Sign in
+          <ArrowRight className="h-5 w-5" />
+        </Button>
+      </form>
+    </AuthShell>
   );
 }

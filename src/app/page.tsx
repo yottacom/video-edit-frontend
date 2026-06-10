@@ -1,29 +1,15 @@
 'use client';
 
-import { useEffect } from 'react';
-import { useRouter } from 'next/navigation';
 import { useAuthStore } from '@/lib/store';
-import { Loader2 } from 'lucide-react';
+import { Landing } from '@/components/landing/Landing';
 
 export default function HomePage() {
-  const router = useRouter();
   const { isAuthenticated, hasHydrated } = useAuthStore();
 
-  useEffect(() => {
-    if (!hasHydrated) {
-      return;
-    }
+  // Until the auth store rehydrates, render the landing as a logged-out
+  // visitor — this keeps the marketing page visible on first paint and
+  // avoids a redirect flash for everyone who lands here.
+  const authed = hasHydrated && isAuthenticated;
 
-    if (isAuthenticated) {
-      router.replace('/dashboard');
-    } else {
-      router.replace('/auth/login');
-    }
-  }, [hasHydrated, isAuthenticated, router]);
-
-  return (
-    <div className="min-h-screen bg-slate-950 flex items-center justify-center">
-      <Loader2 className="w-8 h-8 text-violet-500 animate-spin" />
-    </div>
-  );
+  return <Landing isAuthenticated={authed} />;
 }
