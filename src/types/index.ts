@@ -102,6 +102,9 @@ export interface Brand {
   product_description: string | null;
   tone: string | null;
   logo_asset_id: string | null;
+  logo_url?: string | null;
+  product_asset_id?: string | null;
+  product_url?: string | null;
   primary_color: string | null;
   secondary_color: string | null;
   default_voice_id: string | null;
@@ -116,6 +119,7 @@ export interface BrandPayload {
   product_description?: string | null;
   tone?: string | null;
   logo_asset_id?: string | null;
+  product_asset_id?: string | null;
   primary_color?: string | null;
   secondary_color?: string | null;
   default_voice_id?: string | null;
@@ -136,6 +140,7 @@ export interface Persona {
   personality: string | null;
   appearance_prompt: string | null;
   portrait_asset_id: string | null;
+  portrait_url?: string | null;
   reference_asset_ids: string[];
   voice_id: string | null;
   created_at: string;

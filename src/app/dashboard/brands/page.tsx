@@ -5,6 +5,7 @@ import {
   Image as ImageIcon,
   Mic,
   Music,
+  Package,
   Palette,
   Pencil,
   Plus,
@@ -21,8 +22,8 @@ import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { Input } from '@/components/ui/Input';
 import { Toast } from '@/components/ui/Toast';
 import { AssetPickerModal } from '@/components/assets/AssetPickerModal';
-import { api, brandsApi, getApiErrorMessage } from '@/lib/api';
-import { AssetItem, Brand, BrandPayload } from '@/types';
+import { api, assetsApi, brandsApi, getApiErrorMessage } from '@/lib/api';
+import { AssetGenerationJobResponse, AssetItem, Brand, BrandPayload } from '@/types';
 
 type ToastState = {
   open: boolean;
@@ -74,6 +75,8 @@ const DEFAULT_SECONDARY_COLOR = '#6366f1';
 const selectClassName =
   'block h-11 w-full rounded-xl border border-slate-700 bg-slate-800 px-3 text-sm text-white transition-all duration-200 ease-out focus:border-violet-500/60 focus:outline-none focus:ring-2 focus:ring-violet-500/20';
 
+type BrandAssetPickerTarget = 'logo' | 'product' | null;
+
 interface BrandFormState {
   name: string;
   productDescription: string;
@@ -85,6 +88,8 @@ interface BrandFormState {
   musicMood: string;
   logoAssetId: string | null;
   logoPreviewUrl: string | null;
+  productAssetId: string | null;
+  productPreviewUrl: string | null;
 }
 
 const EMPTY_FORM: BrandFormState = {
@@ -98,6 +103,8 @@ const EMPTY_FORM: BrandFormState = {
   musicMood: '',
   logoAssetId: null,
   logoPreviewUrl: null,
+  productAssetId: null,
+  productPreviewUrl: null,
 };
 
 function formatDateTime(value: string) {
@@ -134,6 +141,8 @@ function buildFormFromBrand(brand: Brand, logoPreviewUrl: string | null): BrandF
     musicMood: brand.default_music_mood || '',
     logoAssetId: brand.logo_asset_id,
     logoPreviewUrl,
+    productAssetId: brand.product_asset_id ?? null,
+    productPreviewUrl: brand.product_url ?? null,
   };
 }
 
@@ -196,7 +205,13 @@ export default function BrandsPage() {
   const [editingBrand, setEditingBrand] = useState<Brand | null>(null);
   const [form, setForm] = useState<BrandFormState>(EMPTY_FORM);
   const [savingBrand, setSavingBrand] = useState(false);
-  const [showLogoPicker, setShowLogoPicker] = useState(false);
+  const [assetPickerTarget, setAssetPickerTarget] = useState<BrandAssetPickerTarget>(null);
+
+  // Product image generation state
+  const [generatingProduct, setGeneratingProduct] = useState(false);
+  const [pollingProduct, setPollingProduct] = useState(false);
+  const [productJob, setProductJob] = useState<AssetGenerationJobResponse | null>(null);
+  const [productError, setProductError] = useState<string | null>(null);
 
   // Delete State
   const [brandToDelete, setBrandToDelete] = useState<Brand | null>(null);
@@ -269,9 +284,12 @@ export default function BrandsPage() {
   }, [loadBrands]);
 
   useEffect(() => {
+    // Only brands without a backend-resolved logo_url need the (user-scoped)
+    // asset fetch fallback; logo_url/product_url are used directly for display.
     const missingLogoIds = Array.from(
       new Set(
         brands
+          .filter((brand) => !brand.logo_url)
           .map((brand) => brand.logo_asset_id)
           .filter((assetId): assetId is string => !!assetId)
       )
@@ -333,15 +351,24 @@ export default function BrandsPage() {
     return asset?.thumbnail_url || asset?.url || null;
   }, [logoAssetCache]);
 
+  const resetProductGeneration = useCallback(() => {
+    setGeneratingProduct(false);
+    setPollingProduct(false);
+    setProductJob(null);
+    setProductError(null);
+  }, []);
+
   const handleOpenCreateModal = () => {
     setEditingBrand(null);
     setForm(EMPTY_FORM);
+    resetProductGeneration();
     setShowBrandModal(true);
   };
 
   const handleOpenEditModal = (brand: Brand) => {
     setEditingBrand(brand);
-    setForm(buildFormFromBrand(brand, getLogoUrl(brand.logo_asset_id)));
+    setForm(buildFormFromBrand(brand, brand.logo_url || getLogoUrl(brand.logo_asset_id)));
+    resetProductGeneration();
     setShowBrandModal(true);
   };
 
@@ -351,9 +378,10 @@ export default function BrandsPage() {
     }
 
     setShowBrandModal(false);
-    setShowLogoPicker(false);
+    setAssetPickerTarget(null);
     setEditingBrand(null);
     setForm(EMPTY_FORM);
+    resetProductGeneration();
   };
 
   const hasInvalidColor =
@@ -371,6 +399,7 @@ export default function BrandsPage() {
       product_description: form.productDescription.trim() || null,
       tone: form.tone || null,
       logo_asset_id: form.logoAssetId,
+      product_asset_id: form.productAssetId,
       primary_color: form.primaryColor ? form.primaryColor.toLowerCase() : null,
       secondary_color: form.secondaryColor ? form.secondaryColor.toLowerCase() : null,
       default_voice_id: form.voiceId.trim() || null,
@@ -394,9 +423,10 @@ export default function BrandsPage() {
       }
 
       setShowBrandModal(false);
-      setShowLogoPicker(false);
+      setAssetPickerTarget(null);
       setEditingBrand(null);
       setForm(EMPTY_FORM);
+      resetProductGeneration();
     } catch (error) {
       console.error('Failed to save brand:', error);
       showToast(getApiErrorMessage(error, 'Failed to save brand.'), 'error', 'Save Failed');
@@ -404,6 +434,110 @@ export default function BrandsPage() {
       setSavingBrand(false);
     }
   };
+
+  const isProductBusy = generatingProduct || pollingProduct;
+
+  const applyGeneratedProduct = useCallback((asset: AssetItem) => {
+    setForm((currentForm) => ({
+      ...currentForm,
+      productAssetId: asset.id,
+      productPreviewUrl: asset.thumbnail_url || asset.url,
+    }));
+  }, []);
+
+  const handleGenerateProduct = async () => {
+    const description = form.productDescription.trim();
+    if (!description || isProductBusy) {
+      return;
+    }
+
+    setGeneratingProduct(true);
+    setProductError(null);
+
+    try {
+      const response = await assetsApi.generate({
+        asset_type: 'image',
+        title: `${form.name.trim() || 'Brand'} product image`,
+        prompt: `Professional studio product photo on a clean background, sharp focus: ${description}`,
+        aspect_ratio: '1:1',
+      });
+
+      if (response.asset) {
+        applyGeneratedProduct(response.asset);
+        showToast('Generated image set as the product image. Save the brand to keep it.', 'success', 'Product Image Ready');
+      } else {
+        setProductJob(response);
+
+        if (response.job_id) {
+          setPollingProduct(true);
+        } else {
+          setProductError('Generation started, but the backend did not return polling details.');
+        }
+      }
+    } catch (error) {
+      console.error('Failed to generate product image:', error);
+      setProductError(getApiErrorMessage(error, 'Failed to generate product image.'));
+    } finally {
+      setGeneratingProduct(false);
+    }
+  };
+
+  useEffect(() => {
+    const jobId = productJob?.job_id;
+    const pollUrl = productJob?.poll_url || undefined;
+
+    if (!jobId || !pollingProduct) {
+      return;
+    }
+
+    let cancelled = false;
+
+    const pollProductJob = async () => {
+      try {
+        const result = await assetsApi.pollGenerationJob(jobId, pollUrl);
+
+        if (cancelled) {
+          return;
+        }
+
+        setProductJob(result);
+
+        const asset = result.asset;
+        if (asset) {
+          setPollingProduct(false);
+          setProductJob(null);
+          setProductError(null);
+          applyGeneratedProduct(asset);
+          showToast('Generated image set as the product image. Save the brand to keep it.', 'success', 'Product Image Ready');
+          return;
+        }
+
+        if (result.status === 'failed') {
+          setPollingProduct(false);
+          setProductError(result.error || 'Product image generation failed.');
+          return;
+        }
+
+        window.setTimeout(() => {
+          if (!cancelled) {
+            void pollProductJob();
+          }
+        }, 1500);
+      } catch (error) {
+        if (!cancelled) {
+          console.error('Failed to poll product image generation job:', error);
+          setPollingProduct(false);
+          setProductError(getApiErrorMessage(error, 'Failed to poll product image generation progress.'));
+        }
+      }
+    };
+
+    void pollProductJob();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [productJob?.job_id, productJob?.poll_url, pollingProduct, applyGeneratedProduct, showToast]);
 
   const handleDeleteBrand = async () => {
     if (!brandToDelete) {
@@ -456,10 +590,19 @@ export default function BrandsPage() {
       />
 
       <AssetPickerModal
-        isOpen={showLogoPicker}
-        onClose={() => setShowLogoPicker(false)}
+        isOpen={assetPickerTarget !== null}
+        onClose={() => setAssetPickerTarget(null)}
         allowedTypes={['image']}
         onSelectAsset={(asset) => {
+          if (assetPickerTarget === 'product') {
+            setForm((currentForm) => ({
+              ...currentForm,
+              productAssetId: asset.id,
+              productPreviewUrl: asset.thumbnailUrl || asset.url,
+            }));
+            return;
+          }
+
           setForm((currentForm) => ({
             ...currentForm,
             logoAssetId: asset.id,
@@ -497,53 +640,147 @@ export default function BrandsPage() {
             </div>
 
             <CardContent className="min-h-0 flex-1 space-y-5 overflow-y-auto p-6">
-              {/* Logo */}
-              <div className="space-y-1.5">
-                <label className="block text-sm font-medium text-slate-300">Logo</label>
-                <div className="flex items-center gap-4">
-                  <div className="flex h-20 w-20 shrink-0 items-center justify-center overflow-hidden rounded-2xl border border-slate-700 bg-slate-950">
-                    {form.logoPreviewUrl ? (
-                      <div
-                        className="h-full w-full bg-contain bg-center bg-no-repeat"
-                        style={{ backgroundImage: `url("${form.logoPreviewUrl}")` }}
-                      />
-                    ) : form.logoAssetId ? (
-                      <ImageIcon className="h-7 w-7 text-slate-500" />
-                    ) : (
-                      <Palette className="h-7 w-7 text-slate-600" />
-                    )}
-                  </div>
-                  <div className="flex flex-wrap items-center gap-3">
-                    <Button
-                      type="button"
-                      variant="outline"
-                      onClick={() => setShowLogoPicker(true)}
-                      disabled={savingBrand}
-                    >
-                      <ImageIcon className="h-4 w-4" />
-                      {form.logoAssetId ? 'Change Logo' : 'Choose Logo'}
-                    </Button>
-                    {form.logoAssetId && (
+              <div className="grid gap-5 sm:grid-cols-2">
+                {/* Logo */}
+                <div className="space-y-1.5">
+                  <label className="block text-sm font-medium text-slate-300">Logo</label>
+                  <div className="flex items-start gap-3">
+                    <div className="flex h-20 w-20 shrink-0 items-center justify-center overflow-hidden rounded-2xl border border-slate-700 bg-slate-950">
+                      {form.logoPreviewUrl ? (
+                        <div
+                          className="h-full w-full bg-contain bg-center bg-no-repeat"
+                          style={{ backgroundImage: `url("${form.logoPreviewUrl}")` }}
+                        />
+                      ) : form.logoAssetId ? (
+                        <ImageIcon className="h-7 w-7 text-slate-500" />
+                      ) : (
+                        <Palette className="h-7 w-7 text-slate-600" />
+                      )}
+                    </div>
+                    <div className="flex flex-col items-start gap-2">
                       <Button
                         type="button"
-                        variant="ghost"
-                        onClick={() =>
-                          setForm((currentForm) => ({
-                            ...currentForm,
-                            logoAssetId: null,
-                            logoPreviewUrl: null,
-                          }))
-                        }
+                        size="sm"
+                        variant="outline"
+                        onClick={() => setAssetPickerTarget('logo')}
                         disabled={savingBrand}
                       >
-                        Remove
+                        <ImageIcon className="h-4 w-4" />
+                        {form.logoAssetId ? 'Change Logo' : 'Choose Logo'}
                       </Button>
-                    )}
+                      {form.logoAssetId && (
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="ghost"
+                          onClick={() =>
+                            setForm((currentForm) => ({
+                              ...currentForm,
+                              logoAssetId: null,
+                              logoPreviewUrl: null,
+                            }))
+                          }
+                          disabled={savingBrand}
+                        >
+                          Remove
+                        </Button>
+                      )}
+                    </div>
                   </div>
+                  <p className="text-xs text-slate-500">
+                    Pick an image asset from your library, or upload one from inside the picker.
+                  </p>
                 </div>
-                <p className="text-xs text-slate-500">
-                  Pick an image asset from your library, or upload one from inside the picker.
-                </p>
+
+                {/* Product image */}
+                <div className="space-y-1.5">
+                  <label className="block text-sm font-medium text-slate-300">Product Image</label>
+                  <div className="flex items-start gap-3">
+                    <div className="flex h-20 w-20 shrink-0 items-center justify-center overflow-hidden rounded-2xl border border-slate-700 bg-slate-950">
+                      {form.productPreviewUrl ? (
+                        <div
+                          className="h-full w-full bg-cover bg-center"
+                          style={{ backgroundImage: `url("${form.productPreviewUrl}")` }}
+                        />
+                      ) : form.productAssetId ? (
+                        <ImageIcon className="h-7 w-7 text-slate-500" />
+                      ) : (
+                        <Package className="h-7 w-7 text-slate-600" />
+                      )}
+                    </div>
+                    <div className="flex flex-col items-start gap-2">
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        onClick={() => setAssetPickerTarget('product')}
+                        disabled={savingBrand || isProductBusy}
+                      >
+                        <ImageIcon className="h-4 w-4" />
+                        {form.productAssetId ? 'Change Image' : 'Choose Image'}
+                      </Button>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="secondary"
+                        onClick={() => {
+                          void handleGenerateProduct();
+                        }}
+                        loading={isProductBusy}
+                        disabled={!form.productDescription.trim() || isProductBusy || savingBrand}
+                        title={
+                          form.productDescription.trim()
+                            ? undefined
+                            : 'Add a product description below to generate'
+                        }
+                      >
+                        <Sparkles className="h-4 w-4" />
+                        {generatingProduct ? 'Starting...' : pollingProduct ? 'Generating...' : 'Generate'}
+                      </Button>
+                      {form.productAssetId && (
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="ghost"
+                          onClick={() =>
+                            setForm((currentForm) => ({
+                              ...currentForm,
+                              productAssetId: null,
+                              productPreviewUrl: null,
+                            }))
+                          }
+                          disabled={savingBrand}
+                        >
+                          Remove
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+                  <p className="text-xs text-slate-500">
+                    The canonical product shot — every ad will keep this exact product consistent.
+                  </p>
+
+                  {productJob && pollingProduct && (
+                    <div className="rounded-xl border border-violet-500/20 bg-violet-500/10 px-3 py-2">
+                      <div className="flex items-center justify-between gap-2 text-xs">
+                        <span className="font-medium text-white">Generating product image</span>
+                        <span className="tabular-nums text-violet-200">{productJob.progress ?? 0}%</span>
+                      </div>
+                      <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-slate-800">
+                        <div
+                          className="h-full rounded-full bg-gradient-to-r from-violet-500 to-indigo-500 transition-all duration-500"
+                          style={{ width: `${Math.min(100, Math.max(0, productJob.progress ?? 0))}%` }}
+                        />
+                      </div>
+                    </div>
+                  )}
+
+                  {productError && (
+                    <div className="rounded-xl border border-red-500/20 bg-red-500/10 px-3 py-2 text-xs text-red-200">
+                      {productError}
+                    </div>
+                  )}
+                </div>
               </div>
 
               <Input
@@ -764,7 +1001,8 @@ export default function BrandsPage() {
       ) : (
         <div className="grid gap-5 sm:grid-cols-2 xl:grid-cols-3">
           {brands.map((brand) => {
-            const logoUrl = getLogoUrl(brand.logo_asset_id);
+            const logoUrl = brand.logo_url || getLogoUrl(brand.logo_asset_id);
+            const productUrl = brand.product_url || null;
 
             return (
               <Card key={brand.id} hover className="group overflow-hidden border-slate-800/80 bg-slate-950/60">
@@ -793,14 +1031,27 @@ export default function BrandsPage() {
 
                 <CardContent className="p-5 pt-0">
                   <div className="-mt-8 mb-4 flex items-end justify-between">
-                    <div className="flex h-16 w-16 items-center justify-center overflow-hidden rounded-2xl border border-slate-700 bg-slate-950 shadow-lg shadow-black/40">
-                      {logoUrl ? (
+                    <div className="flex items-end gap-2.5">
+                      <div className="flex h-16 w-16 items-center justify-center overflow-hidden rounded-2xl border border-slate-700 bg-slate-950 shadow-lg shadow-black/40">
+                        {logoUrl ? (
+                          <div
+                            className="h-full w-full bg-contain bg-center bg-no-repeat"
+                            style={{ backgroundImage: `url("${logoUrl}")` }}
+                          />
+                        ) : (
+                          <Palette className="h-6 w-6 text-slate-600" />
+                        )}
+                      </div>
+                      {productUrl && (
                         <div
-                          className="h-full w-full bg-contain bg-center bg-no-repeat"
-                          style={{ backgroundImage: `url("${logoUrl}")` }}
-                        />
-                      ) : (
-                        <Palette className="h-6 w-6 text-slate-600" />
+                          className="flex h-16 w-16 items-center justify-center overflow-hidden rounded-2xl border border-slate-700 bg-slate-950 shadow-lg shadow-black/40"
+                          title={`${brand.name} product image`}
+                        >
+                          <div
+                            className="h-full w-full bg-cover bg-center"
+                            style={{ backgroundImage: `url("${productUrl}")` }}
+                          />
+                        </div>
                       )}
                     </div>
 

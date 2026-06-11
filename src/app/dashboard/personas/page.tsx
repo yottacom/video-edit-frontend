@@ -231,11 +231,15 @@ export default function PersonasPage() {
   }, [loadVoices]);
 
   useEffect(() => {
+    // portrait_url (when the backend provides it) covers presets whose assets are
+    // not user-scoped; only fall back to asset fetches for personas without it.
+    // Preset reference assets are skipped too: presets are never edited, and the
+    // user-scoped asset endpoint would reject those fetches anyway.
     const missingAssetIds = Array.from(
       new Set(
         personas.flatMap((persona) => [
-          ...(persona.portrait_asset_id ? [persona.portrait_asset_id] : []),
-          ...persona.reference_asset_ids,
+          ...(persona.portrait_asset_id && !persona.portrait_url ? [persona.portrait_asset_id] : []),
+          ...(persona.is_preset ? [] : persona.reference_asset_ids),
         ])
       )
     ).filter((assetId) => !(assetId in assetCache));
@@ -328,7 +332,7 @@ export default function PersonasPage() {
       appearancePrompt: persona.appearance_prompt || '',
       voiceId: persona.voice_id || '',
       portraitAssetId: persona.portrait_asset_id,
-      portraitPreviewUrl: getAssetPreviewUrl(persona.portrait_asset_id),
+      portraitPreviewUrl: persona.portrait_url || getAssetPreviewUrl(persona.portrait_asset_id),
       referenceImages: persona.reference_asset_ids.map((assetId) => ({
         id: assetId,
         previewUrl: getAssetPreviewUrl(assetId),
@@ -618,7 +622,7 @@ export default function PersonasPage() {
   const ownPersonas = personas.filter((persona) => !persona.is_preset);
 
   const renderPersonaCard = (persona: Persona) => {
-    const portraitUrl = getAssetPreviewUrl(persona.portrait_asset_id);
+    const portraitUrl = persona.portrait_url || getAssetPreviewUrl(persona.portrait_asset_id);
     const voiceName = getVoiceName(persona.voice_id);
     const isPreset = persona.is_preset;
     const isCloning = cloningPersonaId === persona.id;

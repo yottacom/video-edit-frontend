@@ -349,6 +349,10 @@ function DashboardPageInner() {
 
         const portraitPairs = await Promise.all(
           response.items.map(async (persona) => {
+            // Prefer the backend-resolved portrait_url (works for presets whose
+            // assets are not user-scoped); fall back to the asset fetch for own
+            // personas that don't have it.
+            if (persona.portrait_url) return [persona.id, persona.portrait_url] as const;
             if (!persona.portrait_asset_id) return [persona.id, null] as const;
             try {
               const asset = await assetsApi.get(persona.portrait_asset_id);
